@@ -16,7 +16,9 @@ class Settings:
     # postgresql+psycopg://postgres:PASSWORD@db.PROJECT.supabase.co:5432/postgres
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "sqlite:///./heart.db")
     UPLOAD_DIR: str = os.environ.get("UPLOAD_DIR", "./uploads")
-    ADMIN_TOKEN: str = os.environ.get("ADMIN_TOKEN", "dev-admin-token-change-me")
+    # No default — the admin revocation endpoint must never ship with a
+    # publicly-known token. Fail fast at import if it is unset.
+    ADMIN_TOKEN: str = os.environ.get("ADMIN_TOKEN", "")
 
     # Day-one guardrails (§2 of the architecture spec)
     RATE_LIMIT_PER_HOUR: int = _int("RATE_LIMIT_PER_HOUR", 100)
@@ -29,3 +31,10 @@ class Settings:
 
 
 settings = Settings()
+
+if not settings.ADMIN_TOKEN:
+    raise RuntimeError(
+        "ADMIN_TOKEN environment variable must be set. "
+        "There is intentionally no default: the admin key-revocation endpoint "
+        "must never be protected by a publicly-known token."
+    )

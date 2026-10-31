@@ -87,7 +87,8 @@ python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 ```
 
 Environment overrides: `DATABASE_URL` (default `sqlite:///./heart.db`),
-`UPLOAD_DIR`, `ADMIN_TOKEN` (**change from the dev default before any real use**),
+`UPLOAD_DIR`, `ADMIN_TOKEN` (**required** — no default; the app refuses to start
+without it),
 `RATE_LIMIT_PER_HOUR`, `MAX_FILE_BYTES`, `MAX_WORKS_PER_DAY`,
 `KEY_ROTATION_DAYS`, `ROTATION_GRACE_HOURS`.
 

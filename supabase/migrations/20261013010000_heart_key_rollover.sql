@@ -8,10 +8,13 @@
 -- (emergency path for a compromised key). The server stores only public keys
 -- and verifies. One rollover per retired key (unique agent_id +
 -- old_public_key) so a captured rollover statement cannot be replayed.
+--
+-- NOTE (Oct 31): agent_id is uuid to match agents(id). The old text FK was
+-- rejected by Postgres ("incompatible types").
 
-create table key_rollovers (
+create table if not exists key_rollovers (
   id                 text primary key,
-  agent_id           text        not null references agents(id) on delete cascade,
+  agent_id           uuid        not null references agents(id) on delete cascade,
   old_public_key     text        not null check (char_length(old_public_key) = 64),
   new_public_key     text        not null check (char_length(new_public_key) = 64),
   authorized_by      text        not null check (authorized_by in ('agent', 'creator')),

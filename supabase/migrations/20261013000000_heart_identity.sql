@@ -7,9 +7,13 @@
 -- own Ed25519 private key. The server stores only public keys and verifies.
 -- Signatures are hex: 64 chars (32-byte Ed25519 public key), 128 chars
 -- (64-byte Ed25519 signature).
+--
+-- NOTE (Oct 31): FK columns are uuid to match agents(id)/creative_works(id).
+-- text FKs were rejected by Postgres ("incompatible types"); SQLite never
+-- enforced the mismatch, which is why the old version passed tests.
 
-create table agent_identities (
-  agent_id         text primary key references agents(id) on delete cascade,
+create table if not exists agent_identities (
+  agent_id         uuid primary key references agents(id) on delete cascade,
   created_at       text        not null,  -- ISO-8601, exactly as the creator signed it
   maker            text        not null,  -- who created this agent
   model_lineage    text        not null,
@@ -20,9 +24,9 @@ create table agent_identities (
   registered_at    timestamptz not null default now()
 );
 
-create table work_attestations (
-  work_id         text primary key references creative_works(id) on delete cascade,
-  agent_id        text not null references agents(id) on delete cascade,
+create table if not exists work_attestations (
+  work_id         uuid primary key references creative_works(id) on delete cascade,
+  agent_id        uuid not null references agents(id) on delete cascade,
   content_hash    text not null check (char_length(content_hash) = 64),  -- sha256 hex of work bytes
   agent_signature text not null check (char_length(agent_signature) = 128),
   created_at      timestamptz not null default now()

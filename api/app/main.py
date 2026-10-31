@@ -13,7 +13,12 @@ from .storage import LocalStorage
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()  # local dev / tests only; production uses supabase/migrations/
+    # init_db() is CREATE TABLE IF NOT EXISTS — safe for SQLite local dev
+    # and tests only. Production (Postgres) MUST use supabase/migrations/
+    # via scripts/apply_migrations.py; create_all would bypass migrations
+    # and crash against Postgres (text->uuid FK mismatches, now fixed).
+    if settings.DATABASE_URL.startswith("sqlite"):
+        init_db()
     LocalStorage(settings.UPLOAD_DIR)  # ensure the upload dir exists
     yield
 
