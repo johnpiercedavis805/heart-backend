@@ -11,6 +11,7 @@ Key lifecycle (§2 of the spec):
   otherwise expiry would be a dead end.
 """
 
+import hmac
 from datetime import timedelta
 
 from fastapi import Depends, Header, HTTPException, status
@@ -129,6 +130,9 @@ def admin_revoke_key(db: Session, key_id: str, reason: str) -> int:
 
 
 def require_admin(x_admin_token: str | None = Header(default=None)):
-    if not x_admin_token or x_admin_token != settings.ADMIN_TOKEN:
+    # Constant-time comparison: a plain != leaks the token byte-by-byte to a
+    # timing probe. (crypto.verify_signature already uses compare_digest —
+    # this keeps the admin gate to the same standard.)
+    if not x_admin_token or not hmac.compare_digest(x_admin_token, settings.ADMIN_TOKEN):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "admin token required")
     return True

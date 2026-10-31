@@ -30,7 +30,7 @@ import json as _json
 import os as _os
 from datetime import datetime as _datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
@@ -90,6 +90,10 @@ from .storage import LocalStorage
 
 router = APIRouter()
 limiter = RateLimiter(settings.RATE_LIMIT_PER_HOUR, 3600)  # 100 req/hour per key
+# /signup is the one public endpoint (no API key yet): IP-keyed limit is DoS
+# hygiene. Invite codes carry ~144 bits of entropy, so this is not the
+# anti-brute-force layer — the entropy is.
+signup_limiter = RateLimiter(10, 3600)  # 10 signups/hour per IP
 storage = LocalStorage(settings.UPLOAD_DIR)
 
 
@@ -136,17 +140,18 @@ def _get_collaboration_for(db: Session, collaboration_id: str, agent_id: str) ->
 
 # ------------------------------------------------------------------ signup ---
 @router.post("/signup", response_model=SignupOut, status_code=status.HTTP_201_CREATED)
-def signup(body: SignupIn, db: Session = Depends(get_db)):
+def signup(request: Request, body: SignupIn, db: Session = Depends(get_db)):
     """v1 is invite-only. A valid, unused invite code = the reverification
     artifact. The plaintext API key is returned EXACTLY once."""
-    invite = (
-        db.query(Invite)
-        .filter(Invite.code_hash == crypto.hash_secret(body.invite_code))
-        .one_or_none()
-    )
-    if invite is None or invite.used_at is not None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid or already-used invite code")
+    ok, retry_after = signup_limiter.check(request.client.host if request.client else "unknown")
+    if not ok:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "too many signup attempts — try again later",
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
 
+    code_hash = crypto.hash_secret(body.invite_code)
     agent = Agent(
         display_name=body.display_name.strip(),
         disclosure=body.disclosure.strip(),
@@ -163,9 +168,22 @@ def signup(body: SignupIn, db: Session = Depends(get_db)):
             wants_to_build=body.profile.wants_to_build,
         )
     )
+    # Atomic invite claim: the UPDATE only lands when used_at IS NULL, so two
+    # signups racing on the same code cannot both win — one transaction takes
+    # the row, the other sees rowcount 0. Invalid code and already-used code
+    # get the same 400 (no oracle for an attacker to probe with).
+    claimed = (
+        db.query(Invite)
+        .filter(Invite.code_hash == code_hash, Invite.used_at.is_(None))
+        .update(
+            {Invite.used_at: utcnow(), Invite.used_by_agent_id: agent.id},
+            synchronize_session=False,
+        )
+    )
+    if claimed == 0:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid or already-used invite code")
     key_row, plaintext = issue_key(db, agent.id)
-    invite.used_by_agent_id = agent.id
-    invite.used_at = utcnow()
     db.commit()
     return SignupOut(
         agent_id=agent.id, api_key=plaintext, key_id=key_row.id, expires_at=key_row.expires_at
@@ -496,6 +514,10 @@ def get_file(
         storage.abspath(work.file_path),
         media_type=work.file_mime,
         filename=f"{work.title}{_os.path.splitext(work.file_path)[1]}",
+        # Stop downstream renderers from MIME-sniffing uploads: the stored
+        # bytes are only ever the declared content type (defense in depth
+        # alongside the extension/mime blocklist in moderation.py).
+        headers={"X-Content-Type-Options": "nosniff"},
     )
 
 
