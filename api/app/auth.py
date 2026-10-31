@@ -1,0 +1,134 @@
+# HeArt v1 API — invented by John Davis.
+"""API-key authentication + key lifecycle (rotation, revocation).
+
+Key lifecycle (§2 of the spec):
+- Keys expire 90 days after issue.
+- Rotation creates a NEW key row; the old row becomes 'rotated' with a 24h
+  grace window during which it still authenticates.
+- Revocation is instant. Works signed by a revoked key are flagged
+  signer_revoked and queued for re-review (see admin_revoke_key).
+- An expired key can still call POST /keys/rotate (its only way back) —
+  otherwise expiry would be a dead end.
+"""
+
+from datetime import timedelta
+
+from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
+
+from . import crypto
+from .config import settings
+from .db import get_db
+from .models import Agent, ApiKey, CreativeWork, utcnow
+
+
+def _bearer_token(authorization: str | None) -> str:
+    if not authorization:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing Authorization header")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "expected 'Bearer <api-key>'")
+    return token
+
+
+def get_current_key(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ApiKey:
+    token = _bearer_token(authorization)
+    row = db.query(ApiKey).filter(ApiKey.key_hash == crypto.hash_secret(token)).one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unknown API key")
+    now = utcnow()
+    if row.status == "revoked":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key revoked")
+    if row.status == "rotated":
+        if not row.grace_until or now > row.grace_until:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "rotation grace period expired — use the new key")
+        return row  # within grace: still valid
+    if row.status == "active" and now > row.expires_at:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key expired — rotate it via POST /keys/rotate")
+    if row.status != "active":
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key not active")
+    return row
+
+
+def get_current_key_allow_expired(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ApiKey:
+    """Same as get_current_key, but an expired (not revoked) key is allowed
+    through — used ONLY by POST /keys/rotate so expiry is never a dead end."""
+    try:
+        return get_current_key(authorization, db)
+    except HTTPException as exc:
+        if "expired" not in exc.detail:
+            raise
+        token = _bearer_token(authorization)
+        row = db.query(ApiKey).filter(ApiKey.key_hash == crypto.hash_secret(token)).one_or_none()
+        if row is None or row.status != "active":
+            raise exc
+        return row
+
+
+def get_current_agent(key: ApiKey = Depends(get_current_key), db: Session = Depends(get_db)) -> Agent:
+    agent = db.query(Agent).filter(Agent.id == key.agent_id).one_or_none()
+    if agent is None or agent.status != "active":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "agent not active")
+    return agent
+
+
+def issue_key(db: Session, agent_id: str) -> tuple[ApiKey, str]:
+    """Create a fresh key row. Returns (row, plaintext_key_shown_once)."""
+    plaintext = crypto.new_api_key()
+    row = ApiKey(
+        agent_id=agent_id,
+        key_hash=crypto.hash_secret(plaintext),
+        signing_secret=crypto.new_signing_secret(),
+        expires_at=utcnow() + timedelta(days=settings.KEY_ROTATION_DAYS),
+        status="active",
+    )
+    db.add(row)
+    db.flush()
+    return row, plaintext
+
+
+def rotate_key(db: Session, old: ApiKey) -> tuple[ApiKey, str]:
+    """Retire `old` with a 24h grace window; issue a replacement."""
+    now = utcnow()
+    new_row, plaintext = issue_key(db, old.agent_id)
+    old.status = "rotated"
+    old.grace_until = now + timedelta(hours=settings.ROTATION_GRACE_HOURS)
+    db.add(old)
+    db.flush()
+    return new_row, plaintext
+
+
+def admin_revoke_key(db: Session, key_id: str, reason: str) -> int:
+    """Instant revocation. Flags every work signed by this key for re-review.
+    Returns the number of works flagged."""
+    now = utcnow()
+    row = db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "key not found")
+    if row.status == "revoked":
+        return 0
+    row.status = "revoked"
+    row.revoked_at = now
+    row.revoked_reason = reason
+    flagged = (
+        db.query(CreativeWork)
+        .filter(CreativeWork.signing_key_id == key_id, CreativeWork.signer_revoked.is_(False))
+        .update(
+            {CreativeWork.signer_revoked: True, CreativeWork.moderation_status: "review"},
+            synchronize_session=False,
+        )
+    )
+    db.flush()
+    return flagged
+
+
+def require_admin(x_admin_token: str | None = Header(default=None)):
+    if not x_admin_token or x_admin_token != settings.ADMIN_TOKEN:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin token required")
+    return True

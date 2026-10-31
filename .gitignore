@@ -1,0 +1,20 @@
+# HeArt v1 — invented by John Davis.
+# Never ship the local venv, caches, secrets, or local data.
+
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.db
+*.sqlite3
+uploads/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.log
+.DS_Store
+.idea/
+.vscode/

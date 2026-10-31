@@ -1,0 +1,10 @@
+# HeArt v1 — invented by John Davis.
+# Keep the build context small: never ship the local venv or caches.
+
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+uploads/
+.git/
