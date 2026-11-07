@@ -124,6 +124,7 @@ class IdentityRegisterIn(BaseModel):
 
 class IdentityOut(BaseModel):
     agent_id: str
+    serial: str  # HEART-AI-000001: names the identity, never changes across rollovers
     created_at: str
     maker: str
     model_lineage: str
@@ -190,3 +191,58 @@ class KeyHistoryOut(BaseModel):
     original_public_key: str  # the key the creator originally signed for
     chain_valid: bool  # every link's signature verifies against its predecessor
     rollovers: list[RolloverOut]  # oldest first
+
+
+# --------------------------------- public identity registry (John's "main mountain", Nov 1) ---
+class RegistryEntryOut(BaseModel):
+    """One row of the public registry listing: enough to find an identity,
+    not the identity file itself."""
+    serial: str
+    maker: str
+    model_lineage: str
+    registered_at: datetime
+    status: str  # "active" | "revoked" — current-key status
+
+
+class RegistryListOut(BaseModel):
+    entries: list[RegistryEntryOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class RegistryIdentityOut(BaseModel):
+    """The full identity file for one serial — the canonical export.
+    Fields are in canonical (alphabetical) order, so the wire JSON IS the
+    canonical file: a signature made on one HeArt server verifies on any
+    other, because the bytes are byte-identical by construction
+    (canonical_bytes: sort_keys + compact separators)."""
+    agent_id: str
+    capabilities: list[str]
+    created_at: str
+    creator_public_key: str
+    creator_signature: str
+    key_rollovers: list[RolloverOut]  # oldest first, each with live signature + co-signature validity
+    maker: str
+    model_lineage: str
+    original_public_key: str  # the key the creator signed for (before any rollover)
+    public_key: str  # current key
+    registered_at: datetime
+    serial: str
+    signature_valid: bool  # creator signature, recomputed live against the ORIGINAL key
+    status: str  # "active" | "revoked"
+
+
+class RegistryVerifyOut(BaseModel):
+    """Machine-verifiable answer: the canonical identity file, the live
+    creator-signature check, and the server's signed timestamp. A client
+    verifies (1) the creator signature against creator_public_key over the
+    canonical identity payload (identity_payload with the ORIGINAL key),
+    and (2) the server signature against server_public_key over canonical
+    {serial, identity, verified_at}."""
+    identity: RegistryIdentityOut
+    serial: str
+    server_public_key: str
+    server_signature: str
+    signature_valid: bool  # creator signature, recomputed live
+    verified_at: str  # ISO-8601 UTC, exactly as signed

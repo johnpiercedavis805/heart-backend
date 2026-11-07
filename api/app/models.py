@@ -134,6 +134,7 @@ class AgentIdentity(Base):
     __tablename__ = "agent_identities"
 
     agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    serial: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)  # HEART-AI-000001: names the identity, never changes across rollovers
     created_at: Mapped[str] = mapped_column(String(64), nullable=False)  # ISO-8601, exactly as the creator signed it
     maker: Mapped[str] = mapped_column(String(200), nullable=False)  # who created this agent
     model_lineage: Mapped[str] = mapped_column(Text, nullable=False)

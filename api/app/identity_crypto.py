@@ -109,6 +109,53 @@ def verify_ed25519(public_key_hex: str, message: bytes, signature_hex: str) -> b
 
 
 # ---------------------------------------------------------------------------
+# SERVER-SIDE registry verification. The server signs "I verified this
+# identity file at this time" attestations for GET /registry/:serial/verify.
+# This is the SERVER's own key — it never signs identities or works, and it
+# is never an agent or creator key. The public key is returned in every
+# verify response so anyone can check the timestamp signature. The seed
+# comes from settings.REGISTRY_SIGNING_KEY when set (production: a stable
+# key, public half published out-of-band so verifiers can pin it); when
+# unset, an ephemeral per-process key is generated (dev/tests — the
+# signature still verifies within that process's lifetime).
+# ---------------------------------------------------------------------------
+
+_server_key_cache: SigningKey | None = None
+
+
+def _server_signing_key() -> SigningKey:
+    global _server_key_cache
+    if _server_key_cache is None:
+        from .config import settings  # local import: config must not import this module
+
+        seed = settings.REGISTRY_SIGNING_KEY
+        _server_key_cache = (
+            SigningKey(bytes.fromhex(seed)) if seed else SigningKey.generate()
+        )
+    return _server_key_cache
+
+
+def server_public_key_hex() -> str:
+    """SERVER-SIDE. The registry timestamp-signer's public key, hex."""
+    return _server_signing_key().verify_key.encode().hex()
+
+
+def server_sign_ed25519(message: bytes) -> str:
+    """SERVER-SIDE. Sign bytes with the registry timestamp key -> hex sig."""
+    return _server_signing_key().sign(message).signature.hex()
+
+
+def registry_verify_payload(serial: str, identity_file: dict, verified_at_iso: str) -> bytes:
+    """The exact bytes the server signs for GET /registry/:serial/verify:
+    'at time T, this server verified this identity file for this serial'.
+    Binding the identity content to the timestamp means the attestation
+    cannot be replayed onto a different identity file."""
+    return canonical_bytes(
+        {"identity": identity_file, "serial": serial, "verified_at": verified_at_iso}
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLIENT-SIDE helpers. These exist for tests and for agent SDKs. The SERVER
 # must never call these for real identities/works: private keys must never
 # touch the server. Grep the codebase — sign_ed25519 / generate_keypair must

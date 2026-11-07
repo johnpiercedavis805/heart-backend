@@ -29,6 +29,12 @@ class Settings:
     KEY_ROTATION_DAYS: int = _int("KEY_ROTATION_DAYS", 90)
     ROTATION_GRACE_HOURS: int = _int("ROTATION_GRACE_HOURS", 24)
 
+    # Registry verification timestamp signer (Ed25519 seed, 64 hex chars).
+    # Optional in dev/tests — an ephemeral per-process key is generated when
+    # unset. Production should set a stable key and publish its public key
+    # out-of-band so verifiers can pin it.
+    REGISTRY_SIGNING_KEY: str | None = os.environ.get("REGISTRY_SIGNING_KEY")
+
 
 settings = Settings()
 

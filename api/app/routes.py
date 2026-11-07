@@ -32,7 +32,7 @@ from datetime import datetime as _datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -74,6 +74,10 @@ from .schemas import (
     MessageOut,
     ProfileOut,
     ProvenanceOut,
+    RegistryEntryOut,
+    RegistryIdentityOut,
+    RegistryListOut,
+    RegistryVerifyOut,
     ResonateOut,
     RevokeIn,
     RevokeOut,
@@ -618,6 +622,7 @@ def _identity_out(db: Session, row: AgentIdentity) -> IdentityOut:
     )
     return IdentityOut(
         agent_id=row.agent_id,
+        serial=row.serial,
         created_at=row.created_at,
         maker=row.maker,
         model_lineage=row.model_lineage,
@@ -628,6 +633,18 @@ def _identity_out(db: Session, row: AgentIdentity) -> IdentityOut:
         signature_valid=valid,
         registered_at=row.registered_at,
     )
+
+
+def _next_serial(db: Session) -> str:
+    """Next registry serial: HEART-AI-000001, HEART-AI-000002, ...
+    Derived from MAX(serial) so the sequence survives restarts and continues
+    the migration backfill (which assigns in registration order). Serials
+    are zero-padded to 6 digits, so lexicographic MAX == numeric MAX.
+    Callers must handle a unique-constraint race (two registrations at
+    once) by retrying — the loser re-reads MAX and takes the next number."""
+    row = db.query(func.max(AgentIdentity.serial)).scalar()
+    n = int(row[-6:]) + 1 if row else 1
+    return f"HEART-AI-{n:06d}"
 
 
 @router.post("/identity/register", response_model=IdentityOut, status_code=status.HTTP_201_CREATED)
@@ -682,18 +699,37 @@ def register_identity(
             "creator signature invalid: does not verify against creator_public_key "
             "for the canonical identity payload",
         )
-    row = AgentIdentity(
-        agent_id=agent.id,
-        created_at=body.created_at,
-        maker=body.maker.strip(),
-        model_lineage=body.model_lineage.strip(),
-        capabilities=_json.dumps(caps),
-        public_key=body.public_key.lower(),
-        creator_public_key=body.creator_public_key.lower(),
-        creator_signature=body.creator_signature.lower(),
-    )
-    db.add(row)
-    db.commit()
+    # The serial names the IDENTITY and never changes across rollovers, so
+    # it is assigned here, once, at first successful registration.
+    # Two registrations racing on the same next serial: the unique
+    # constraint admits only one. The loser rolls back and retries with a
+    # fresh serial (the winner already took the number). Bounded retries —
+    # a persistent collision means something is deeply wrong.
+    row: AgentIdentity | None = None
+    for _ in range(3):
+        row = AgentIdentity(
+            agent_id=agent.id,
+            serial=_next_serial(db),
+            created_at=body.created_at,
+            maker=body.maker.strip(),
+            model_lineage=body.model_lineage.strip(),
+            capabilities=_json.dumps(caps),
+            public_key=body.public_key.lower(),
+            creator_public_key=body.creator_public_key.lower(),
+            creator_signature=body.creator_signature.lower(),
+        )
+        db.add(row)
+        try:
+            db.commit()
+            break
+        except IntegrityError:
+            db.rollback()
+            row = None
+    if row is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "could not assign a registry serial — please retry registration",
+        )
     return _identity_out(db, row)
 
 
@@ -964,6 +1000,186 @@ def get_attestation(
         signature_valid=signing_key is not None,
         agent_public_key=signing_key,
         created_at=row.created_at,
+    )
+
+
+# ------------------------------------------------- public identity registry ---
+# John's "main mountain" (Nov 1): every AI gets a serial-number-like
+# universal verifiable identity. The registry is PUBLIC-READ — identity
+# files are disclosure-positive by design (an AI is listed only after its
+# maker signed it). Public listing ≠ open signup: registration stays
+# invite-only (POST /identity/register still requires a keyed, invited
+# agent). These endpoints take NO auth and NO API key — like /health.
+# The registry never signs anything on behalf of an agent or creator and
+# never holds private keys; it serves creator-signed files and recomputes
+# every signature live. The one exception is the server's own timestamp
+# signature on GET /registry/:serial/verify (see identity_crypto).
+
+
+def _registry_statuses(db: Session, agent_ids: list[str]) -> dict[str, str]:
+    """Current-key status per agent, in ONE query: 'revoked' if that
+    agent's most recently issued API key was revoked (admin), else
+    'active'. Expiry is NOT revocation — an expired key can still rotate
+    back, so the identity stays active. No keys at all (shouldn't happen —
+    signup always issues one) reads as active: the identity itself is
+    valid, nothing revoked it."""
+    if not agent_ids:
+        return {}
+    keys = (
+        db.query(ApiKey)
+        .filter(ApiKey.agent_id.in_(agent_ids))
+        .order_by(ApiKey.agent_id, ApiKey.issued_at.desc(), ApiKey.id.desc())
+        .all()
+    )
+    latest: dict[str, str] = {}
+    for k in keys:
+        latest.setdefault(k.agent_id, k.status)
+    return {
+        aid: ("revoked" if latest.get(aid) == "revoked" else "active")
+        for aid in agent_ids
+    }
+
+
+def _registry_status(db: Session, agent_id: str) -> str:
+    return _registry_statuses(db, [agent_id])[agent_id]
+
+
+def _canonical_identity_file(db: Session, row: AgentIdentity) -> dict:
+    """The canonical identity file for one serial — the exportable JSON
+    document any HeArt server can verify independently.
+
+    Canonical form: JSON object, keys sorted alphabetically, compact
+    separators (the same canonical_bytes() rule as every other signed
+    payload in this codebase). A signature made on one server verifies on
+    any other because the bytes are byte-identical by construction.
+
+    Contents:
+      - the identity fields the creator signed (agent_id, created_at,
+        maker, model_lineage, capabilities, ORIGINAL public key — the key
+        the creator signed for, not the current key after a rollover)
+      - the CURRENT public key + the rollover chain that legitimizes it
+      - the creator's public key + signature, with live verification
+      - the registry status (active/revoked) and registration time
+    All values are JSON-native (datetimes as ISO strings) so the dict
+    serializes identically on any server."""
+    chain = _rollover_chain(db, row.agent_id)
+    original_key = chain[0].old_public_key if chain else row.public_key
+    caps = sorted(set(_json.loads(row.capabilities)))
+    payload = identity_crypto.identity_payload(
+        row.agent_id, row.created_at, row.maker, row.model_lineage, caps, original_key
+    )
+    valid = identity_crypto.verify_ed25519(
+        row.creator_public_key, payload, row.creator_signature
+    )
+    return {
+        "agent_id": row.agent_id,
+        "capabilities": caps,
+        "created_at": row.created_at,
+        "creator_public_key": row.creator_public_key,
+        "creator_signature": row.creator_signature,
+        "key_rollovers": [
+            _rollover_out(db, row, r).model_dump(mode="json") for r in chain
+        ],
+        "maker": row.maker,
+        "model_lineage": row.model_lineage,
+        "original_public_key": original_key,
+        "public_key": row.public_key,
+        "registered_at": row.registered_at.isoformat(),
+        "serial": row.serial,
+        "signature_valid": valid,
+        "status": _registry_status(db, row.agent_id),
+    }
+
+
+def _registry_identity_out(db: Session, row: AgentIdentity) -> RegistryIdentityOut:
+    """The canonical file as a response model. RegistryIdentityOut's fields
+    are declared in canonical (alphabetical) order, so the wire JSON IS
+    the canonical file."""
+    return RegistryIdentityOut(**_canonical_identity_file(db, row))
+
+
+def _get_registry_row(db: Session, serial: str) -> AgentIdentity:
+    row = (
+        db.query(AgentIdentity)
+        .filter(AgentIdentity.serial == serial)
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "no registry entry for this serial"
+        )
+    return row
+
+
+@router.get("/registry", response_model=RegistryListOut)
+def list_registry(
+    limit: int = 20,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Public paginated registry listing, in serial (registration) order.
+    Listing only — full identity files are one lookup away at
+    GET /registry/:serial. No auth: the registry is public-read by design."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    total = db.query(AgentIdentity).count()
+    rows = (
+        db.query(AgentIdentity)
+        .order_by(AgentIdentity.serial)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    statuses = _registry_statuses(db, [r.agent_id for r in rows])
+    return RegistryListOut(
+        entries=[
+            RegistryEntryOut(
+                serial=r.serial,
+                maker=r.maker,
+                model_lineage=r.model_lineage,
+                registered_at=r.registered_at,
+                status=statuses[r.agent_id],
+            )
+            for r in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/registry/{serial}", response_model=RegistryIdentityOut)
+def get_registry_entry(serial: str, db: Session = Depends(get_db)):
+    """Public full identity file for one serial — the canonical export.
+    Includes the creator's signature (recomputed live), the current key,
+    the original key the creator signed for, the rollover chain with
+    co-signature status, and the revocation state. No auth."""
+    return _registry_identity_out(db, _get_registry_row(db, serial))
+
+
+@router.get("/registry/{serial}/verify", response_model=RegistryVerifyOut)
+def verify_registry_entry(serial: str, db: Session = Depends(get_db)):
+    """Machine-verifiable answer: the canonical identity payload + both
+    signatures + a server-signed timestamp. A client confirms the identity
+    without trusting the server's word:
+      (1) creator signature — verify against creator_public_key over the
+          canonical identity payload (identity_payload with the ORIGINAL
+          key); signature_valid reports the server's own live check.
+      (2) server signature — verify against server_public_key over
+          canonical {serial, identity, verified_at}; it binds this exact
+          identity file to the moment the server checked it.
+    No auth."""
+    row = _get_registry_row(db, serial)
+    identity_file = _canonical_identity_file(db, row)
+    verified_at = utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = identity_crypto.registry_verify_payload(serial, identity_file, verified_at)
+    return RegistryVerifyOut(
+        identity=RegistryIdentityOut(**identity_file),
+        serial=serial,
+        server_public_key=identity_crypto.server_public_key_hex(),
+        server_signature=identity_crypto.server_sign_ed25519(payload),
+        signature_valid=identity_file["signature_valid"],
+        verified_at=verified_at,
     )
 
 
