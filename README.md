@@ -16,6 +16,10 @@ heart-backend/
 ├── supabase/migrations/20261013010000_heart_key_rollover.sql  # rollover chain
 ├── supabase/migrations/20261016000000_heart_cosignature.sql  # creator co-signature
 ├── supabase/migrations/20261107000000_heart_registry_serial.sql  # registry serials
+├── docs/
+│   ├── production-red-pen.md       # T2: deployment review (KEEP/FIX/CUT)
+│   ├── migration-safety-check.md   # T3: migration safety findings
+│   └── creation-attestation-spec.md  # T4: creation-attestation spec (draft)
 ├── api/
 │   ├── requirements.txt
 │   ├── app/
@@ -33,8 +37,8 @@ heart-backend/
 │   │   └── db.py          # engine/session (SQLite local, Postgres prod)
 │   ├── scripts/mint_invite.py  # admin: mint invite codes
 │   ├── tests/test_loop.py      # end-to-end verification (39 checks)
-│   └── tests/test_identity.py  # identity + attestation (17 checks)
-│   └── tests/test_rollover.py  # key rollover chain (27 checks)
+│   ├── tests/test_identity.py  # identity + attestation (17 checks)
+│   ├── tests/test_rollover.py  # key rollover chain (27 checks)
 │   └── tests/test_registry.py  # public identity registry (29 checks)
 ```
 
@@ -82,19 +86,11 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything (112 checks: core loop, identity, rollover, registry)
-./.venv/bin/python api/tests/test_loop.py
-# 2. identity + attestation (17 checks: registration, verification, tamper/wrong-key/missing-identity rejects)
-./.venv/bin/python api/tests/test_identity.py
-
-# 3. key rollover (27 checks: old-key-signed rotation, history chain, historical
-#    verification, creator emergency path, replay/duplicate rejects)
-./.venv/bin/python api/tests/test_rollover.py
-
-# 4. public identity registry (29 checks: serial assignment + stability across
-#    rollover, public listing + pagination, canonical export determinism,
-#    independent verification of both signatures, revoked status, gates)
-./.venv/bin/python api/tests/test_registry.py
+# 1. verify everything — 112 checks: core loop, identity, rollover, registry
+./.venv/bin/python api/tests/test_loop.py        # core loop (39 checks)
+./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
+./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
+./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
 
 # 2. mint an invite code (v1 is invite-only)
 ./.venv/bin/python api/scripts/mint_invite.py --note "who this is for"
@@ -118,14 +114,17 @@ so verifiers can pin it).
 
 ## Production (Supabase) — what needs real credentials
 
-1. Create a Supabase project; run `supabase/migrations/20261011000000_heart_v1.sql`
-   (creates all tables; RLS enabled with deny-by-default — the API connects with
-   the **service_role** key, which bypasses RLS; never expose it to clients).
-   Or run all four migrations at once with no manual SQL:
-   `DATABASE_URL='postgresql+psycopg://…' python api/scripts/apply_migrations.py --yes`
-   (refuses sqlite and requires psycopg — see the script).
+1. Create a Supabase project; apply the five migrations in order (see
+   `docs/migration-safety-check.md` — all five are safe to apply; run
+   migration 5 with the app stopped). The quick way, no manual SQL:
+   `DATABASE_URL='postgresql+psycopg://…' python scripts/apply_migrations.py --yes`
+   (refuses sqlite and requires psycopg — see the script). RLS is enabled
+   with deny-by-default on every table — the API connects with the
+   **service_role** key, which bypasses RLS; never expose it to clients.
 2. Set `DATABASE_URL` to the Postgres connection string
-   (`postgresql+psycopg://…`; add `psycopg[binary]` to requirements).
+   (`postgresql+psycopg://…`). The Dockerfile already installs
+   `psycopg[binary]`; add it to `requirements.txt` only for a
+   non-Docker deploy.
 3. Create a **private** Storage bucket for uploads; swap `LocalStorage`
    for signed-URL bucket access in `storage.py` (interface is ready).
 4. Set a strong `ADMIN_TOKEN`; move `api_keys.signing_secret` into a KMS/vault
@@ -287,15 +286,12 @@ out-of-band so verifiers can pin it).
    (`GET /identity/:agent_id/key-history`); historical work signatures keep
    verifying against the retired keys. Invite-only admission is unchanged —
    verification needs no authority, but v1 still gates who can register.
-5. **Public identity registry** — BUILT Nov 7 (John's "main mountain", Nov 1),
-   pending John's sign-off on the three design decisions:
-   - **Serial format** — working choice: `HEART-AI-000001`, sequential.
-     He signs off.
+5. **Public identity registry** — BUILT Nov 7 (John's "main mountain", Nov 1).
+   **Approved by John Nov 7** — all three design decisions:
+   - **Serial format** — `HEART-AI-000001`, sequential.
    - **Public listing** — the registry is readable by anyone (that's the
-     point of a registry); signing up still needs an invite. Flag if he
-     wants it tighter.
-   - **What's shown** — maker name and model line are public. If he wants
-     a way to hide the maker, that's a new feature, not this build.
+     point of a registry); signing up still needs an invite.
+   - **What's shown** — maker name and model line are public.
 
 ## Test results (2026-11-07, local — 112 checks total)
 

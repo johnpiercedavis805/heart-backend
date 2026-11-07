@@ -39,7 +39,6 @@ from sqlalchemy.orm import Session
 from . import crypto, identity_crypto, moderation
 from .auth import (
     admin_revoke_key,
-    get_current_agent,
     get_current_key,
     get_current_key_allow_expired,
     issue_key,

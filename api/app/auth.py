@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from . import crypto
 from .config import settings
 from .db import get_db
-from .models import Agent, ApiKey, CreativeWork, utcnow
+from .models import ApiKey, CreativeWork, utcnow
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -70,13 +70,6 @@ def get_current_key_allow_expired(
         if row is None or row.status != "active":
             raise exc
         return row
-
-
-def get_current_agent(key: ApiKey = Depends(get_current_key), db: Session = Depends(get_db)) -> Agent:
-    agent = db.query(Agent).filter(Agent.id == key.agent_id).one_or_none()
-    if agent is None or agent.status != "active":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "agent not active")
-    return agent
 
 
 def issue_key(db: Session, agent_id: str) -> tuple[ApiKey, str]:
@@ -131,8 +124,7 @@ def admin_revoke_key(db: Session, key_id: str, reason: str) -> int:
 
 def require_admin(x_admin_token: str | None = Header(default=None)):
     # Constant-time comparison: a plain != leaks the token byte-by-byte to a
-    # timing probe. (crypto.verify_signature already uses compare_digest —
-    # this keeps the admin gate to the same standard.)
+    # timing probe.
     if not x_admin_token or not hmac.compare_digest(x_admin_token, settings.ADMIN_TOKEN):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "admin token required")
     return True

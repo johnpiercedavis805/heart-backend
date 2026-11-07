@@ -45,7 +45,3 @@ def sign_hash(sha_hex: str, signing_secret_hex: str) -> str:
         sha_hex.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-
-
-def verify_signature(sha_hex: str, signature: str, signing_secret_hex: str) -> bool:
-    return hmac.compare_digest(signature, sign_hash(sha_hex, signing_secret_hex))
