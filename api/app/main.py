@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import billing_routes, routes
+from . import billing_routes, crypto_routes, routes
 from .config import settings
 from .db import init_db
 from .storage import LocalStorage
@@ -31,3 +31,4 @@ app = FastAPI(
 )
 app.include_router(routes.router)
 app.include_router(billing_routes.router)
+app.include_router(crypto_routes.router)

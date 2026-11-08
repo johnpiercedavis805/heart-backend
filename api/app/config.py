@@ -45,6 +45,12 @@ class Settings:
     # Flat-rate premium price (created in the Stripe Dashboard, test mode):
     # e.g. price_... — see api/scripts/stripe_create_price.py.
     STRIPE_PRICE_PREMIUM_MONTHLY: str = os.environ.get("STRIPE_PRICE_PREMIUM_MONTHLY", "")
+    # USDC-denominated premium price (same $9.99, in USDC — see
+    # api/scripts/stripe_create_price.py). A subscription on this price
+    # is paid from the customer's crypto wallet; Stripe settles it to
+    # the Stripe balance in USD. Recurring stablecoin subscriptions are
+    # in private preview — the Dashboard step is in docs/crypto-payments.md.
+    STRIPE_PRICE_PREMIUM_MONTHLY_USDC: str = os.environ.get("STRIPE_PRICE_PREMIUM_MONTHLY_USDC", "")
     # Hosted Checkout redirect targets (App-to-Web path). The mobile app
     # should register these as deep links / web fallbacks.
     STRIPE_CHECKOUT_SUCCESS_URL: str = os.environ.get("STRIPE_CHECKOUT_SUCCESS_URL", "")
@@ -53,6 +59,18 @@ class Settings:
     # Enable before the FIRST LIVE charge — John's call, not a code change.
     STRIPE_TAX_ENABLED: bool = os.environ.get("STRIPE_TAX_ENABLED", "0") not in ("0", "false", "False")
     STRIPE_TEST_MODE_ONLY: bool = os.environ.get("STRIPE_TEST_MODE_ONLY", "1") not in ("0", "false", "False")
+
+    # ---- Coinbase (Bitcoin) — HeArt Premium paid in BTC (Nov 8, 2026)
+    # Keys live in env vars — never in the repo, never in chat. There is
+    # NO sandbox for the Commerce Charge API (see app/coinbase.py): the
+    # module refuses to run without a key, and tests mock the HTTP
+    # boundary. The key is the Coinbase Commerce API key from
+    # Settings -> API Keys; the webhook secret is the shared secret from
+    # the webhook subscription in the same place.
+    COINBASE_API_KEY: str = os.environ.get("COINBASE_API_KEY", "")
+    COINBASE_WEBHOOK_SECRET: str = os.environ.get("COINBASE_WEBHOOK_SECRET", "")
+    COINBASE_API_BASE: str = os.environ.get("COINBASE_API_BASE", "https://api.commerce.coinbase.com")
+    COINBASE_API_VERSION: str = os.environ.get("COINBASE_API_VERSION", "2018-03-22")
 
 
 settings = Settings()

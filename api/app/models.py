@@ -200,7 +200,51 @@ class KeyRollover(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
-# ----------------- Stripe billing (HeArt Premium; plan Nov 7, 2026) --------
+# ----------------- crypto payments (HeArt Premium in USDC / BTC, Nov 8) ---
+class CryptoPayment(Base):
+    """One crypto purchase of HeArt Premium, paid outside Stripe (Bitcoin
+    via the Coinbase Commerce Charge API — the legacy API; see
+    app/coinbase.py for why that is the only Coinbase route to BTC).
+
+    Priced in USD ($9.99 — PREMIUM_MONTHLY_USD_CENTS); the payer chooses
+    the coin at Coinbase's hosted checkout (Bitcoin is the expected coin,
+    but the checkout offers every coin Coinbase supports — the CONFIRMED
+    webhook's payment value is what was actually paid, recorded in
+    amount_crypto / crypto_currency). A confirmed payment activates
+    premium for 30 days (premium_until) and triggers the SAME 50/50
+    creator payout as a Stripe subscription payment, computed on the USD
+    value — via a synthetic InvoiceRecord namespaced
+    'coinbase:<charge id>' (there is no Stripe invoice for a Coinbase
+    payment; the payout ledger keys on that reference, see
+    billing.process_payouts_for_invoice).
+
+    Bitcoin cannot auto-renew: there is no card-on-file equivalent, so
+    each month is a fresh charge the user pays by hand. Charges expire
+    after 1 hour if unpaid (Coinbase's rule).
+
+    status: "created" (charge made, not yet paid) | "pending"
+    (transaction seen on-chain, not yet confirmed) | "confirmed" (paid
+    — premium active, payout triggered) | "failed" (expired / failed —
+    no premium, no payout). coinbase_event_id is the last processed
+    webhook event id (a re-delivered charge:confirmed for an already
+    confirmed charge is a duplicate and changes nothing)."""
+
+    __tablename__ = "crypto_payments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="coinbase")
+    coinbase_charge_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    coinbase_charge_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    hosted_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amount_usd_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)  # 999 — the USD price, whatever coin was paid
+    amount_crypto: Mapped[str | None] = mapped_column(String(50), nullable=True)  # e.g. "0.00010500" — from the confirmed payment
+    crypto_currency: Mapped[str | None] = mapped_column(String(20), nullable=True)  # e.g. "BTC" — from the confirmed payment
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="created")  # created | pending | confirmed | failed
+    premium_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    coinbase_event_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 # Local mirrors of Stripe objects. Stripe is the source of truth; these
 # rows exist so the app can answer "is this agent premium?" and reconcile
 # invoices without a Stripe round-trip on every request. Webhooks keep them

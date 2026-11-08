@@ -36,14 +36,17 @@ heart-backend/
 │   │   ├── config.py      # env-var settings
 │   │   ├── db.py          # engine/session (SQLite local, Postgres prod)
 │   │   ├── billing.py     # Stripe: Checkout, Payment Sheet, Billing, Invoicing, Connect v2 (test mode only)
-│   │   └── billing_routes.py  # /billing router (signature-verified webhooks)
+│   │   ├── billing_routes.py  # /billing router (signature-verified webhooks)
+│   │   ├── coinbase.py    # Bitcoin: Coinbase Commerce Charge API (legacy — the only Coinbase route to BTC)
+│   │   └── crypto_routes.py   # /crypto router (BTC charge + Coinbase webhooks)
 │   ├── scripts/mint_invite.py  # admin: mint invite codes
-│   ├── scripts/stripe_create_price.py  # admin: create HeArt Premium price in TEST mode
+│   ├── scripts/stripe_create_price.py  # admin: create HeArt Premium prices (USD + USDC) in TEST mode
 │   ├── tests/test_loop.py      # end-to-end verification (39 checks)
 │   ├── tests/test_identity.py  # identity + attestation (17 checks)
 │   ├── tests/test_rollover.py  # key rollover chain (27 checks)
 │   ├── tests/test_registry.py  # public identity registry (29 checks)
-│   └── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (89 checks)
+│   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (89 checks)
+│   └── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
 ```
 
 **Stack choice: Python/FastAPI.** Single-process, dependency-light, and the
@@ -92,6 +95,19 @@ test-only is on), `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`,
 `STRIPE_PRICE_PREMIUM_MONTHLY` (create it with
 `api/scripts/stripe_create_price.py`).
 
+**Crypto payments — USDC (Stripe) + Bitcoin (Coinbase)** (John's calls,
+Nov 8; test mode / mocked only): the same $9.99 Premium, paid in USDC
+(`POST /billing/checkout` or `/billing/payment-sheet` with
+`{"currency": "usdc"}`, USDC price from the same price script) or in
+Bitcoin (`POST /crypto/bitcoin/charge` → Coinbase hosted checkout;
+`POST /crypto/webhooks/coinbase` confirms it — one-time $9.99, 30 days
+of premium, same 50/50 payout on the USD value; Bitcoin cannot
+auto-renew). Full write-up: `docs/crypto-payments.md`. Env vars:
+`STRIPE_PRICE_PREMIUM_MONTHLY_USDC`, `COINBASE_API_KEY`,
+`COINBASE_WEBHOOK_SECRET`. Honest flag: the current Coinbase Business
+API is USDC-only — Bitcoin runs on the legacy Commerce Charge API,
+the only Coinbase route to BTC (see `api/app/coinbase.py`).
+
 **Day-one guardrails** (spec §2): 100 req/hour per key, 10 MB file cap,
 1 work/agent/day — all enforced and tested.
 
@@ -110,12 +126,13 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 173 checks: core loop, identity, rollover, registry, Stripe billing
+# 1. verify everything — 255 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments
 ./.venv/bin/python api/tests/test_loop.py        # core loop (39 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
 ./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (89 checks)
+./.venv/bin/python api/tests/test_crypto.py      # crypto payments: USDC + Bitcoin (54 checks)
 
 # 2. mint an invite code (v1 is invite-only)
 ./.venv/bin/python api/scripts/mint_invite.py --note "who this is for"
@@ -318,7 +335,7 @@ out-of-band so verifiers can pin it).
      point of a registry); signing up still needs an invite.
    - **What's shown** — maker name and model line are public.
 
-## Test results (2026-11-08, local — 173 checks total)
+## Test results (2026-11-08, local — 255 checks total)
 
 - `api/tests/test_loop.py`: **39/39 pass** — invite gate, signup, hash+HMAC
   pipeline, identity-blind feed, one-way resonate (no match), mutual resonate
@@ -381,6 +398,20 @@ out-of-band so verifiers can pin it).
   Session + test card 4242) has NOT been run from this sandbox (no test key
   here, and the sandbox egress proxy breaks TLS to Stripe); see
   `docs/stripe-integration.md` for the exact smoke-test commands.
+- `api/tests/test_crypto.py` (2026-11-08): **54/54 pass** — USDC price
+  creation (9.99 USDC = 9,990,000 smallest units), Checkout / Payment
+  Sheet with `currency: "usdc"` (USDC price selected, USD default,
+  invalid currency rejected, 503 without a USDC price), USDC
+  `invoice.paid` webhook with REAL Stripe signature verification
+  (micro-USDC normalizes to 999 USD cents, same 50/50 payout in USD),
+  Bitcoin charge creation (fixed price $9.99 USD, hosted checkout URL,
+  503 without a key), Coinbase webhooks with REAL HMAC-SHA256 signature
+  verification (bad/missing signature → 400), `charge:confirmed`
+  activates 30 days of premium + the 50/50 split on the USD value,
+  `charge:failed` / `charge:pending` activate nothing and pay nobody,
+  re-delivery is a duplicate. Coinbase calls are mocked at the HTTP
+  boundary — no live BTC charge has been run (no key here, and no
+  sandbox exists for the Charge API); see `docs/crypto-payments.md`.
 - **Not run**: the Postgres migration (no Postgres available locally).
   It was carefully reviewed; run `supabase db push` (or paste into the SQL
   editor) on a real project to confirm.

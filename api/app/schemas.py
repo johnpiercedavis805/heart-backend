@@ -249,9 +249,17 @@ class RegistryVerifyOut(BaseModel):
 
 
 # ------------------------------------------------ Stripe billing (HeArt Premium, Nov 8) ---
+class CheckoutIn(BaseModel):
+    currency: str = Field(default="usd", pattern="^(usd|usdc)$")  # "usdc" = pay the $9.99 subscription in USDC (stablecoin; Stripe settles in USD)
+
+
 class CheckoutOut(BaseModel):
     checkout_url: str
     session_id: str
+
+
+class PaymentSheetIn(BaseModel):
+    currency: str = Field(default="usd", pattern="^(usd|usdc)$")  # "usdc" = USDC price; the mobile client confirms with payment method type crypto
 
 
 class PaymentSheetOut(BaseModel):
@@ -276,6 +284,8 @@ class SubscriptionOut(BaseModel):
     stripe_price_id: str | None
     current_period_end: str | None
     cancel_at_period_end: bool
+    source: str = "stripe"  # "stripe" (card/USDC subscription) or "coinbase" (BTC purchase — no Stripe subscription)
+    premium_until: str | None = None  # end of the current premium window (BTC: 30 days from confirmation)
 
 
 class InvoiceCreateIn(BaseModel):
@@ -358,3 +368,39 @@ class PayoutOut(BaseModel):
 class PayoutProcessOut(BaseModel):
     payouts: list[PayoutOut]
     already_processed: bool  # True when the invoice already had payout rows
+
+
+# --------------------------------------- crypto payments (USDC + BTC, Nov 8) ---
+class BitcoinChargeIn(BaseModel):
+    redirect_url: str | None = None  # where Coinbase sends the payer after payment
+    cancel_url: str | None = None  # where Coinbase sends the payer if they bail
+
+
+class BitcoinChargeOut(BaseModel):
+    charge_id: str
+    code: str
+    hosted_url: str  # Coinbase-hosted checkout — the app opens this
+    amount_usd_cents: int  # 999 — priced in USD; the payer pays the BTC equivalent at the current rate
+    currency: str  # "USD" (the price currency; the coin is chosen at checkout)
+    status: str  # "created"
+    expires_note: str  # charges expire after 1 hour if unpaid (Coinbase's rule)
+
+
+class CryptoPaymentOut(BaseModel):
+    id: str
+    agent_id: str
+    provider: str  # "coinbase"
+    coinbase_charge_id: str
+    coinbase_charge_code: str | None
+    hosted_url: str | None
+    amount_usd_cents: int
+    amount_crypto: str | None  # e.g. "0.00010500" — what was actually paid (from the confirmed webhook)
+    crypto_currency: str | None  # e.g. "BTC" — what was actually paid
+    status: str  # created | pending | confirmed | failed
+    premium_until: str | None  # 30 days from confirmation; None until confirmed
+    created_at: datetime
+
+
+class CoinbaseWebhookOut(BaseModel):
+    received: bool
+    result: str  # processed | duplicate | ignored | ignored-no-charge

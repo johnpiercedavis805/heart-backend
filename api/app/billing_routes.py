@@ -33,6 +33,7 @@ from .models import InvoiceRecord, Payout
 from .ratelimit import RateLimiter
 from .routes import get_requester
 from .schemas import (
+    CheckoutIn,
     CheckoutOut,
     ConnectLinkIn,
     ConnectLinkOut,
@@ -41,6 +42,7 @@ from .schemas import (
     ConnectStatusOut,
     InvoiceCreateIn,
     InvoiceOut,
+    PaymentSheetIn,
     PaymentSheetOut,
     PayoutOut,
     PayoutProcessIn,
@@ -79,33 +81,39 @@ def _billing_error(e: Exception) -> HTTPException:
 # --------------------------------------------------------------- payments ---
 @router.post("/checkout", response_model=CheckoutOut)
 def create_checkout(
+    body: CheckoutIn = CheckoutIn(),
     requester=Depends(get_requester),
     db: Session = Depends(get_db),
 ):
     """Hosted Checkout for the premium subscription (App-to-Web). The
     mobile app opens checkout_url; Stripe handles the payment. Returns
-    503 while billing is not configured."""
+    503 while billing is not configured. body.currency="usdc" uses the
+    USDC-denominated price (same $9.99) — the crypto option appears in
+    Checkout once stablecoins are enabled in the Stripe Dashboard."""
     agent, key = requester
     _check_rate_limit(key)
     try:
-        return CheckoutOut(**billing.create_checkout_session(db, agent.id))
+        return CheckoutOut(**billing.create_checkout_session(db, agent.id, currency=body.currency))
     except Exception as e:
         raise _billing_error(e)
 
 
 @router.post("/payment-sheet", response_model=PaymentSheetOut)
 def create_payment_sheet(
+    body: PaymentSheetIn = PaymentSheetIn(),
     requester=Depends(get_requester),
     db: Session = Depends(get_db),
 ):
     """Mobile Payment Sheet params: customer id, ephemeral key, and the
     PaymentIntent client secret for the subscription's first invoice.
     The mobile SDK presents the sheet; the subscription activates on
-    invoice.paid."""
+    invoice.paid. body.currency="usdc" uses the USDC price — the mobile
+    client confirms the PaymentIntent with payment method type crypto
+    (mandate flow per Stripe's stablecoin-subscription guide)."""
     agent, key = requester
     _check_rate_limit(key)
     try:
-        return PaymentSheetOut(**billing.create_payment_sheet(db, agent.id))
+        return PaymentSheetOut(**billing.create_payment_sheet(db, agent.id, currency=body.currency))
     except Exception as e:
         raise _billing_error(e)
 

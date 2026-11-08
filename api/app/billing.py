@@ -21,6 +21,25 @@ no bank account, so no transfer is ever attempted for an AI share. Split
 math is integer cents: creator half = amount_paid // 2 (floor — the odd
 cent stays with HeArt, so $9.99 -> creator 499c, HeArt 500c).
 
+CRYPTO (John's calls, Nov 8 — see docs/crypto-payments.md):
+  - USDC: the same $9.99 subscription, priced in USDC
+    (STRIPE_PRICE_PREMIUM_MONTHLY_USDC). create_checkout_session /
+    create_payment_sheet take currency="usdc" and use the USDC price;
+    the crypto option appears in Checkout / the Payment Sheet once
+    stablecoins are enabled in the Stripe Dashboard. A USDC subscription
+    payment flows through the SAME invoice.paid webhook and the SAME
+    50/50 payout path as a card payment — Stripe settles USDC to the
+    Stripe balance in USD, so the split math is unchanged. USDC amounts
+    arrive from Stripe in micro-USDC (6 decimals: 9.99 USDC =
+    9,990,000); _usd_cents() normalizes them to USD cents at the
+    webhook boundary, and the local mirrors record the SETTLEMENT
+    currency (usd). Recurring stablecoin subscriptions are in private
+    preview — the Dashboard access request is John's step, not code.
+  - Bitcoin: NOT via Stripe (Stripe takes stablecoins only, no BTC).
+    BTC goes through Coinbase (app/coinbase.py) as a one-time $9.99
+    charge that activates one month of premium and triggers the same
+    50/50 split on the USD value. Bitcoin cannot auto-renew.
+
 What is NOT built here (deliberate):
   - Stripe Tax COLLECTION. Threshold monitoring only (tax_status()).
     Collection starts before the first live charge, on John's call, by
@@ -34,7 +53,7 @@ Secrets live in environment variables only (config.settings). The webhook
 handler verifies the Stripe signature before touching any state.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import stripe
 from stripe import StripeClient  # v2 Connect client (import only; construction is lazy — see _stripe_client)
@@ -45,6 +64,7 @@ from .models import (
     AgentIdentity,
     BillingCustomer,
     ConnectAccount,
+    CryptoPayment,
     InvoiceRecord,
     Match,
     Payout,
@@ -102,15 +122,54 @@ def _stripe():
     return stripe
 
 
-def _require_price() -> str:
-    price = settings.STRIPE_PRICE_PREMIUM_MONTHLY
+def _require_price(currency: str = "usd") -> str:
+    """The flat-rate premium price id for a currency. "usd" is the card
+    price (STRIPE_PRICE_PREMIUM_MONTHLY); "usdc" is the stablecoin price
+    (STRIPE_PRICE_PREMIUM_MONTHLY_USDC) — same $9.99, denominated in
+    USDC. Anything else is a caller error."""
+    if currency == "usd":
+        price = settings.STRIPE_PRICE_PREMIUM_MONTHLY
+        env_var = "STRIPE_PRICE_PREMIUM_MONTHLY"
+    elif currency == "usdc":
+        price = settings.STRIPE_PRICE_PREMIUM_MONTHLY_USDC
+        env_var = "STRIPE_PRICE_PREMIUM_MONTHLY_USDC"
+    else:
+        raise ValueError(f"unsupported currency {currency!r} — use 'usd' or 'usdc'")
     if not price:
         raise BillingNotConfigured(
-            "STRIPE_PRICE_PREMIUM_MONTHLY is not set — create the HeArt Premium "
-            "monthly price in the Stripe Dashboard (test mode) and set it. "
-            "See api/scripts/stripe_create_price.py."
+            f"{env_var} is not set — create the HeArt Premium monthly "
+            f"price ({currency}) in the Stripe Dashboard (test mode) and "
+            "set it. See api/scripts/stripe_create_price.py."
         )
     return price
+
+
+# USDC has 6 decimals in Stripe's API: 1 USDC = 1,000,000 smallest units,
+# so 9.99 USDC = 9,990,000. One USD cent is 10,000 micro-USDC.
+USDC_MICRO_PER_USD_CENT = 10_000
+
+
+def _usd_cents(amount, currency: str | None) -> int:
+    """Stripe amounts are in the smallest unit of the charge currency.
+    For USD that is already cents. For USDC it is micro-USDC — divide
+    down to USD cents, because USDC settles to the Stripe balance in
+    USD and every downstream number (invoice mirror, payout split,
+    transfers) is USD cents. A USDC invoice of 9,990,000 becomes 999."""
+    amount = int(amount or 0)
+    if (currency or "usd").lower() == "usdc":
+        return amount // USDC_MICRO_PER_USD_CENT
+    return amount
+
+
+def _settlement_currency(currency: str | None) -> str:
+    """The currency the local mirror records: the settlement currency.
+    USDC settles in USD, so a USDC payment is mirrored as usd (with
+    amounts normalized by _usd_cents) — the payout ledger and the
+    Stripe Transfer calls are all USD. The Stripe price id on the
+    subscription row still identifies the USDC rail."""
+    if (currency or "usd").lower() == "usdc":
+        return "usd"
+    return currency or "usd"
 
 
 def _from_ts(ts) -> datetime | None:
@@ -169,12 +228,16 @@ def get_or_create_customer(db: Session, agent_id: str) -> BillingCustomer:
 
 
 # --------------------------------------------------------------- payments ---
-def create_checkout_session(db: Session, agent_id: str) -> dict:
+def create_checkout_session(db: Session, agent_id: str, *, currency: str = "usd") -> dict:
     """Hosted Checkout (App-to-Web path): a Stripe-hosted page for the
     premium subscription. Returns the URL the mobile app opens. No card
-    data touches HeArt."""
+    data touches HeArt. currency="usdc" uses the USDC-denominated price
+    (same $9.99) — the crypto payment option appears in Checkout once
+    stablecoins are enabled in the Stripe Dashboard (dynamic payment
+    methods); the customer picks a wallet and network on
+    crypto.stripe.com and Stripe settles the payment in USD."""
     s = _stripe()
-    price = _require_price()
+    price = _require_price(currency)
     if not settings.STRIPE_CHECKOUT_SUCCESS_URL or not settings.STRIPE_CHECKOUT_CANCEL_URL:
         raise BillingNotConfigured(
             "STRIPE_CHECKOUT_SUCCESS_URL and STRIPE_CHECKOUT_CANCEL_URL must "
@@ -199,15 +262,19 @@ def create_checkout_session(db: Session, agent_id: str) -> dict:
     return {"checkout_url": session["url"], "session_id": session["id"]}
 
 
-def create_payment_sheet(db: Session, agent_id: str) -> dict:
+def create_payment_sheet(db: Session, agent_id: str, *, currency: str = "usd") -> dict:
     """Mobile Payment Sheet params (the plan's primary mobile path):
     returns everything the mobile SDK needs to present the sheet for a
     premium subscription — customer id, ephemeral key, and the
     PaymentIntent client secret of the subscription's first invoice.
     The subscription starts incomplete and activates on invoice.paid
-    (see handle_webhook_event)."""
+    (see handle_webhook_event). currency="usdc" uses the USDC price:
+    the mobile client confirms the PaymentIntent with payment method
+    type crypto (mandate flow per Stripe's stablecoin-subscription
+    guide — the wallet is saved once and authorizes recurring debits);
+    the backend flow is otherwise identical."""
     s = _stripe()
-    price = _require_price()
+    price = _require_price(currency)
     customer = get_or_create_customer(db, agent_id)
     try:
         ephemeral_key = s.EphemeralKey.create(
@@ -265,14 +332,46 @@ def create_portal_session(db: Session, agent_id: str, return_url: str | None = N
 
 
 def get_subscription_status(db: Session, agent_id: str) -> dict:
-    """Current premium state for one agent, from the local mirror.
-    No subscription row = free tier (freemium)."""
+    """Current premium state for one agent, from the local mirrors.
+    No subscription row and no active crypto premium = free tier
+    (freemium). A live Stripe subscription wins; otherwise a confirmed
+    Bitcoin payment whose 30-day premium window is still open reports
+    active with source "coinbase" (there is no Stripe subscription for
+    a BTC purchase — see app/coinbase.py)."""
     row = (
         db.query(Subscription)
         .filter(Subscription.agent_id == agent_id)
         .order_by(Subscription.created_at.desc())
         .first()
     )
+    if row is not None and row.status in (
+        "active",
+        "trialing",
+        "past_due",
+        "incomplete",
+        "unpaid",
+        "paused",
+    ):
+        return {
+            "status": row.status,
+            "stripe_subscription_id": row.stripe_subscription_id,
+            "stripe_price_id": row.stripe_price_id,
+            "current_period_end": row.current_period_end.isoformat() if row.current_period_end else None,
+            "cancel_at_period_end": row.cancel_at_period_end,
+            "source": "stripe",
+            "premium_until": row.current_period_end.isoformat() if row.current_period_end else None,
+        }
+    btc = _active_crypto_premium(db, agent_id)
+    if btc is not None:
+        return {
+            "status": "active",
+            "stripe_subscription_id": None,
+            "stripe_price_id": None,
+            "current_period_end": btc.premium_until.isoformat() if btc.premium_until else None,
+            "cancel_at_period_end": False,
+            "source": "coinbase",
+            "premium_until": btc.premium_until.isoformat() if btc.premium_until else None,
+        }
     if row is None:
         return {
             "status": "free",
@@ -280,6 +379,8 @@ def get_subscription_status(db: Session, agent_id: str) -> dict:
             "stripe_price_id": None,
             "current_period_end": None,
             "cancel_at_period_end": False,
+            "source": "stripe",
+            "premium_until": None,
         }
     return {
         "status": row.status,
@@ -287,7 +388,29 @@ def get_subscription_status(db: Session, agent_id: str) -> dict:
         "stripe_price_id": row.stripe_price_id,
         "current_period_end": row.current_period_end.isoformat() if row.current_period_end else None,
         "cancel_at_period_end": row.cancel_at_period_end,
+        "source": "stripe",
+        "premium_until": row.current_period_end.isoformat() if row.current_period_end else None,
     }
+
+
+def _active_crypto_premium(db: Session, agent_id: str) -> CryptoPayment | None:
+    """The agent's latest confirmed crypto payment whose 30-day premium
+    window is still open, or None. Bitcoin cannot auto-renew, so the
+    window is the whole premium: once it passes, the agent is free
+    again until they pay for another month by hand."""
+    now = utcnow()
+    row = (
+        db.query(CryptoPayment)
+        .filter(
+            CryptoPayment.agent_id == agent_id,
+            CryptoPayment.status == "confirmed",
+            CryptoPayment.premium_until.isnot(None),
+            CryptoPayment.premium_until > now,
+        )
+        .order_by(CryptoPayment.premium_until.desc())
+        .first()
+    )
+    return row
 
 
 # -------------------------------------------------------------- invoicing ---
@@ -486,7 +609,10 @@ def _sync_invoice(db: Session, inv, *, paid: bool) -> str:
     """Upsert the local invoice mirror from a Stripe Invoice object.
     On invoice.paid the linked subscription is marked active (the
     subscription.updated webhook normally does this too — this is the
-    belt-and-braces path)."""
+    belt-and-braces path). Amounts are normalized to USD cents at this
+    boundary (_usd_cents): a USDC invoice arrives in micro-USDC and
+    settles in USD, so the mirror records USD cents and currency "usd"
+    — the payout split and the Stripe Transfers downstream are all USD."""
     agent_id = _deep_get(inv, "metadata", "agent_id") or _agent_id_for_customer(
         db, _get(inv, "customer")
     )
@@ -498,14 +624,17 @@ def _sync_invoice(db: Session, inv, *, paid: bool) -> str:
         .one_or_none()
     )
     paid_at = _deep_get(inv, "status_transitions", "paid_at")
+    currency = _settlement_currency(_get(inv, "currency"))
+    amount_due = _usd_cents(_get(inv, "amount_due"), _get(inv, "currency"))
+    amount_paid = _usd_cents(_get(inv, "amount_paid"), _get(inv, "currency"))
     if row is None:
         row = InvoiceRecord(
             agent_id=agent_id,
             stripe_invoice_id=inv["id"],
             stripe_subscription_id=_get(inv, "subscription"),
-            amount_due_cents=int(_get(inv, "amount_due") or 0),
-            amount_paid_cents=int(_get(inv, "amount_paid") or 0),
-            currency=_get(inv, "currency") or "usd",
+            amount_due_cents=amount_due,
+            amount_paid_cents=amount_paid,
+            currency=currency,
             status=_get(inv, "status"),
             hosted_invoice_url=_get(inv, "hosted_invoice_url"),
             paid_at=_from_ts(paid_at) if paid else None,
@@ -513,8 +642,9 @@ def _sync_invoice(db: Session, inv, *, paid: bool) -> str:
         db.add(row)
     else:
         row.status = _get(inv, "status")
-        row.amount_due_cents = int(_get(inv, "amount_due") or 0)
-        row.amount_paid_cents = int(_get(inv, "amount_paid") or 0)
+        row.amount_due_cents = amount_due
+        row.amount_paid_cents = amount_paid
+        row.currency = currency
         row.hosted_invoice_url = _get(inv, "hosted_invoice_url")
         row.stripe_subscription_id = _get(inv, "subscription")
         if paid:
@@ -543,8 +673,8 @@ def _on_charge_refunded(db: Session, charge) -> str:
     )
     if row is None:
         return "ignored-no-invoice"
-    row.amount_refunded_cents = (row.amount_refunded_cents or 0) + int(
-        _get(charge, "amount_refunded") or 0
+    row.amount_refunded_cents = (row.amount_refunded_cents or 0) + _usd_cents(
+        _get(charge, "amount_refunded"), _get(charge, "currency")
     )
     if row.amount_paid_cents and row.amount_refunded_cents >= row.amount_paid_cents:
         row.status = "refunded"
@@ -563,7 +693,9 @@ def _on_credit_note_created(db: Session, note) -> str:
     )
     if row is None:
         return "ignored-no-invoice"
-    row.credit_total_cents = (row.credit_total_cents or 0) + int(_get(note, "amount") or 0)
+    row.credit_total_cents = (row.credit_total_cents or 0) + _usd_cents(
+        _get(note, "amount"), _get(note, "currency")
+    )
     return "processed"
 
 

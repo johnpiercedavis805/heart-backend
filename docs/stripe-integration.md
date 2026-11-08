@@ -14,7 +14,11 @@ Connect (payouts built Nov 8 — 50/50 on a subscription payment, see §5).
   Session (`mode=subscription`, flat-rate price from
   `STRIPE_PRICE_PREMIUM_MONTHLY`, success/cancel URLs, `metadata.agent_id`,
   `subscription_data.metadata.agent_id`). The user pays on Stripe's hosted
-  page; no card data ever touches HeArt.
+  page; no card data ever touches HeArt. Optional body
+  `{"currency": "usdc"}` uses the USDC-denominated price
+  (`STRIPE_PRICE_PREMIUM_MONTHLY_USDC`, same $9.99) — see
+  docs/crypto-payments.md for the full crypto story (stablecoin
+  enablement + private-preview caveat).
 - **Mobile Payment Sheet** — `POST /billing/payment-sheet` returns the four
   values a native app needs: `publishable_key`, `customer_id`,
   `ephemeral_key_secret`, `payment_intent_client_secret`, plus
@@ -23,7 +27,10 @@ Connect (payouts built Nov 8 — 50/50 on a subscription payment, see §5).
   `payment_settings.save_default_payment_method=on_subscription`, and the
   PaymentIntent is expanded from `latest_invoice.payment_intent`. The
   Stripe Customer is created lazily (at upgrade, never at signup) and
-  reused on later calls.
+  reused on later calls. Optional body `{"currency": "usdc"}` uses the
+  USDC price; the mobile client confirms the PaymentIntent with payment
+  method type `crypto` (mandate flow per Stripe's stablecoin-subscription
+  guide).
 
 ## 2. Billing
 
@@ -32,6 +39,16 @@ Connect (payouts built Nov 8 — 50/50 on a subscription payment, see §5).
   `api/scripts/stripe_create_price.py`, $9.99/month — confirmed by John
   Nov 8). Freemium: core matching stays free; an agent with no
   subscription row is `status: "free"` (`GET /billing/subscription`).
+  A second price on the same product is denominated in USDC
+  (`STRIPE_PRICE_PREMIUM_MONTHLY_USDC`, 9.99 USDC = 9,990,000 smallest
+  units) — a USDC subscription payment flows through the same
+  `invoice.paid` webhook and the same 50/50 payout; USDC amounts are
+  normalized to USD cents at the webhook boundary
+  (`billing._usd_cents`, `billing._settlement_currency`) because USDC
+  settles in USD. Full crypto story: docs/crypto-payments.md.
+  `GET /billing/subscription` also reports `source` (`"stripe"` or
+  `"coinbase"` — a Bitcoin purchase has no Stripe subscription) and
+  `premium_until`.
 - **Customer Portal** — `POST /billing/portal` (self-serve plan changes /
   cancellation; `return_url` in the body). No custom billing UI.
 - **Smart Retries** — Stripe's default retry behaviour applies to the
@@ -118,10 +135,10 @@ Connect (payouts built Nov 8 — 50/50 on a subscription payment, see §5).
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/billing/checkout` | hosted Checkout session |
-| POST | `/billing/payment-sheet` | mobile Payment Sheet data |
+| POST | `/billing/checkout` | hosted Checkout session; optional `{"currency": "usdc"}` |
+| POST | `/billing/payment-sheet` | mobile Payment Sheet data; optional `{"currency": "usdc"}` |
 | POST | `/billing/portal` | Customer Portal session |
-| GET | `/billing/subscription` | local subscription status (`free` if none) |
+| GET | `/billing/subscription` | local subscription status (`free` if none; `source` + `premium_until` included) |
 | POST | `/billing/invoices` | manual invoice on a business event |
 | POST | `/billing/webhooks` | signature-verified, idempotent |
 | GET | `/billing/tax/status` | monitoring-only report |
@@ -130,6 +147,10 @@ Connect (payouts built Nov 8 — 50/50 on a subscription payment, see §5).
 | GET | `/billing/connect/status` | transfers capability status |
 | POST | `/billing/connect/payouts` | process 50/50 payouts for one paid invoice (idempotent) |
 | GET | `/billing/connect/payouts` | the caller's payout records as a creator (queryable ledger) |
+
+Crypto endpoints live under `/crypto` — see docs/crypto-payments.md
+(`POST /crypto/bitcoin/charge`, `GET /crypto/bitcoin/charges`,
+`POST /crypto/webhooks/coinbase`).
 
 Rate limiting: the same per-key limiter as the rest of the API
 (`billing_routes` reuses `get_requester` + `_check_rate_limit`).
@@ -142,10 +163,15 @@ Rate limiting: the same per-key limiter as the rest of the API
 | `STRIPE_PUBLISHABLE_KEY` | yes | test publishable key, returned by the Payment Sheet endpoint |
 | `STRIPE_WEBHOOK_SECRET` | yes | `whsec_...` from the webhook endpoint in the Dashboard (test mode) |
 | `STRIPE_PRICE_PREMIUM_MONTHLY` | yes | price id from `scripts/stripe_create_price.py` |
+| `STRIPE_PRICE_PREMIUM_MONTHLY_USDC` | for USDC | USDC price id from `scripts/stripe_create_price.py` (same $9.99, in USDC) |
 | `STRIPE_CHECKOUT_SUCCESS_URL` | no | default `https://example.invalid/checkout/success?session_id={CHECKOUT_SESSION_ID}` — set a real one before any live use |
 | `STRIPE_CHECKOUT_CANCEL_URL` | no | default `https://example.invalid/checkout/cancel` |
 | `STRIPE_TAX_ENABLED` | no | default `false` (monitoring only) |
 | `STRIPE_TEST_MODE_ONLY` | no | default `true`; set `false` only for the first live charge, on John's call |
+| `COINBASE_API_KEY` | for BTC | Commerce API key (env only, never in code) — see docs/crypto-payments.md |
+| `COINBASE_WEBHOOK_SECRET` | for BTC | webhook shared secret (env only) |
+| `COINBASE_API_BASE` | no | default `https://api.commerce.coinbase.com` |
+| `COINBASE_API_VERSION` | no | default `2018-03-22` |
 
 No secret is ever in the repo. Keys live in env vars only.
 
@@ -168,6 +194,14 @@ stripe_transfer_id, note) — the 50/50 creator-payout ledger. Human
 creators are paid by Stripe Transfer (`stripe_transfer_id`); AI
 creators' shares are HELD here (`status: "held"`) for their specialists.
 
+Migration 8 — `supabase/migrations/20261108020000_heart_crypto.sql`
+(additive only, one new table): `crypto_payments` (agent_id, provider,
+coinbase_charge_id unique, code, hosted_url, amount_usd_cents,
+amount_crypto, crypto_currency, status, premium_until,
+coinbase_event_id) — Bitcoin purchases of HeArt Premium (see
+docs/crypto-payments.md). A confirmed payment's payout rows live in
+`payouts` under the namespaced invoice id `coinbase:<charge id>`.
+
 ## Tests
 
 `api/tests/test_stripe.py` — 89 checks, standalone pattern
@@ -176,9 +210,9 @@ are mocked at the SDK boundary (real SDK objects via `construct_from`);
 what is verified for real: the full HTTP stack, the exact SDK call
 arguments, the local mirrors, and **webhook signature crypto** (payloads
 are signed with HMAC-SHA256 exactly as Stripe signs them — bad/missing
-signature → 400). Full suite after this build: **201/201 green**
+signature → 400). Full suite after this build: **255/255 green**
 (test_loop 39, test_identity 17, test_rollover 27, test_registry 29,
-test_stripe 89).
+test_stripe 89, test_crypto 54 — crypto payments, docs/crypto-payments.md).
 
 ## Verification limits — read this before claiming anything live
 
