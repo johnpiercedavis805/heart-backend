@@ -124,6 +124,38 @@ def admin_revoke_key(db: Session, key_id: str, reason: str) -> int:
     return flagged
 
 
+def admin_review_work(db: Session, work_id: str, decision: str) -> CreativeWork:
+    """Adjudicate a work in the human review queue (T2 red-pen item 3).
+
+    decision is "approved" or "rejected". Only works currently in
+    "review" can be decided — approving an already-approved work, or
+    deciding a work that was never queued, is a 409. Approving is
+    refused for works whose signer was revoked (signer_revoked): a
+    compromised key's work can never be delivered, so approving it
+    would be a no-op that looks like an approval. Rejecting a revoked
+    signer's work is allowed — it just records the decision.
+    Returns the updated work row.
+    """
+    if decision not in ("approved", "rejected"):
+        raise ValueError(f"decision must be 'approved' or 'rejected', got {decision!r}")
+    work = db.query(CreativeWork).filter(CreativeWork.id == work_id).one_or_none()
+    if work is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "work not found")
+    if work.moderation_status != "review":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"work is '{work.moderation_status}', not in the review queue",
+        )
+    if decision == "approved" and work.signer_revoked:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "cannot approve: the signing key was revoked",
+        )
+    work.moderation_status = decision
+    db.flush()
+    return work
+
+
 def require_admin(x_admin_token: str | None = Header(default=None)):
     # Constant-time comparison: a plain != leaks the token byte-by-byte to a
     # timing probe.

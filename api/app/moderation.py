@@ -2,11 +2,18 @@
 """Moderation pipeline.
 
 =====================================================================
-STUB NOTICE (v1): the content classifier is NOT implemented. `scan_upload`
-enforces the hard structural rules only (no executables, ever) and approves
-everything else. A real scanner — text/image/audio classifiers for
-instructions-to-humans, manipulation, and non-positive content — is a later
-phase. The interface below is the seam it will plug into: keep it stable.
+SAFE DEFAULT (v1, Nov 8 2026 — T2 red-pen item 3): uploads that pass
+the hard structural rules are queued for HUMAN REVIEW
+(`status="review"`), NOT auto-approved. The v1 content classifier is
+still a stub — no content judgment happens at all — so auto-approving
+would put unmoderated content straight on the public feed. A work in
+"review" is invisible on the feed and visible only to its maker until
+an admin approves it via POST /admin/works/{id}/approve (or rejects
+it via .../reject). A future real classifier should return "approved"
+only for content it is confident about, "review" for uncertain
+content, and "rejected" for disallowed content, keeping the same
+ScanResult shape. The interface below is the seam it will plug into:
+keep it stable.
 =====================================================================
 
 Hard rules (§2, enforced structurally, not by AI judgment):
@@ -69,19 +76,21 @@ def hard_check(filename: str, mime: str, size_bytes: int) -> list[str]:
 
 
 def scan_upload(filename: str, mime: str, size_bytes: int, sha256: str) -> ScanResult:
-    """STUB classifier seam.
+    """Content gate for uploads.
 
-    v1 behavior: hard structural rules only. Anything that passes them is
-    approved — flagged as stub so callers (and auditors) know no real content
-    judgment happened. A future classifier should return "review" for
-    uncertain content and "rejected" for disallowed content, keeping the
-    same ScanResult shape.
+    Hard structural rules reject executables/scriptable files outright.
+    Everything else is queued for human review (status="review") — the
+    v1 classifier is a stub, so nothing is auto-approved. An admin
+    approves or rejects the work via the /admin/works review endpoints;
+    only "approved" works appear on the public feed. A future classifier
+    should return "approved" only for content it is confident about,
+    keeping the same ScanResult shape.
     """
     violations = hard_check(filename, mime, size_bytes)
     if violations:
         return ScanResult(status="rejected", reasons=violations, stub=True)
     return ScanResult(
-        status="approved",
-        reasons=["stub: passed structural hard rules; no content classifier in v1"],
+        status="review",
+        reasons=["queued for human review; no content classifier in v1"],
         stub=True,
     )
