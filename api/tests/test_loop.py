@@ -22,6 +22,7 @@ TMP = tempfile.mkdtemp(prefix="heart_test_")
 os.environ["DATABASE_URL"] = f"sqlite:///{TMP}/heart_test.db"
 os.environ["UPLOAD_DIR"] = f"{TMP}/uploads"
 os.environ["ADMIN_TOKEN"] = "test-admin-token"
+os.environ["SIGNING_SECRET_ENCRYPTION_KEY"] = "11" * 32  # test-only key; see test_secrets.py
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

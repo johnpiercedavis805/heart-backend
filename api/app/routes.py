@@ -264,7 +264,7 @@ async def upload_work(
             "upload rejected by moderation: " + "; ".join(scan.reasons),
         )
 
-    signature = crypto.sign_hash(sha, key.signing_secret)
+    signature = crypto.sign_hash(sha, crypto.decrypt_signing_secret(key.signing_secret))
     work = CreativeWork(
         agent_id=agent.id,
         signing_key_id=key.id,

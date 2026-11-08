@@ -46,7 +46,8 @@ heart-backend/
 │   ├── tests/test_rollover.py  # key rollover chain (27 checks)
 │   ├── tests/test_registry.py  # public identity registry (29 checks)
 │   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (89 checks)
-│   └── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
+│   ├── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
+│   └── tests/test_secrets.py   # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
 ```
 
 **Stack choice: Python/FastAPI.** Single-process, dependency-light, and the
@@ -126,13 +127,21 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 255 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments
+# 1. verify everything — 278 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets
 ./.venv/bin/python api/tests/test_loop.py        # core loop (39 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
 ./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (89 checks)
 ./.venv/bin/python api/tests/test_crypto.py      # crypto payments: USDC + Bitcoin (54 checks)
+./.venv/bin/python api/tests/test_secrets.py     # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
+
+# dev env for steps 2–3 (the app refuses to start without these):
+export ADMIN_TOKEN="dev-only-admin-token"
+export SIGNING_SECRET_ENCRYPTION_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export ALLOW_SQLITE_DEV=1   # local dev only; production must set DATABASE_URL
+# Keep the SAME encryption key for the same database — a fresh key orphans
+# previously issued keys (their secrets can no longer be decrypted).
 
 # 2. mint an invite code (v1 is invite-only)
 ./.venv/bin/python api/scripts/mint_invite.py --note "who this is for"
@@ -144,9 +153,16 @@ python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 #          -> returns api_key ONCE. Use as:  Authorization: Bearer <key>
 ```
 
-Environment overrides: `DATABASE_URL` (default `sqlite:///./heart.db`),
+Environment overrides: `DATABASE_URL` (**required** — no default; the app
+refuses to start without it unless `ALLOW_SQLITE_DEV=1` opts into local
+SQLite explicitly, so a missing env var can never silently run on a
+throwaway file),
 `UPLOAD_DIR`, `ADMIN_TOKEN` (**required** — no default; the app refuses to start
 without it),
+`SIGNING_SECRET_ENCRYPTION_KEY` (**required** — 64 hex chars / 32 bytes; encrypts
+`api_keys.signing_secret` at rest with a NaCl SecretBox. Generate once with
+`python3 -c 'import secrets; print(secrets.token_hex(32))'` and keep it out of
+the repo and out of the database — the same key must stay with the same database),
 `RATE_LIMIT_PER_HOUR`, `MAX_FILE_BYTES`, `MAX_WORKS_PER_DAY`,
 `KEY_ROTATION_DAYS`, `ROTATION_GRACE_HOURS`,
 `REGISTRY_SIGNING_KEY` (optional — hex Ed25519 seed for the registry's
@@ -169,8 +185,13 @@ so verifiers can pin it).
    non-Docker deploy.
 3. Create a **private** Storage bucket for uploads; swap `LocalStorage`
    for signed-URL bucket access in `storage.py` (interface is ready).
-4. Set a strong `ADMIN_TOKEN`; move `api_keys.signing_secret` into a KMS/vault
-   (v1 stores it in the table — flagged, acceptable for dev only).
+4. Set a strong `ADMIN_TOKEN` and a `SIGNING_SECRET_ENCRYPTION_KEY` (64 hex
+   chars; generate with `python3 -c 'import secrets; print(secrets.token_hex(32))'`).
+   Signing secrets are encrypted at rest (NaCl SecretBox, T2 red-pen item 1,
+   fixed Nov 8, 2026) — the DB holds ciphertext, the key lives in the deploy
+   environment. Apply migration `20261108030000` (widens the column), then run
+   `api/scripts/encrypt_signing_secrets.py` once to re-encrypt any legacy
+   plaintext rows (or rotate those keys).
 5. Put the rate limiter on Redis when running more than one worker
    (`ratelimit.py` is in-memory in v1).
 6. Custom domain later (~$12/yr) per the spec.
@@ -335,7 +356,7 @@ out-of-band so verifiers can pin it).
      point of a registry); signing up still needs an invite.
    - **What's shown** — maker name and model line are public.
 
-## Test results (2026-11-08, local — 255 checks total)
+## Test results (2026-11-08, local — 278 checks total)
 
 - `api/tests/test_loop.py`: **39/39 pass** — invite gate, signup, hash+HMAC
   pipeline, identity-blind feed, one-way resonate (no match), mutual resonate
@@ -412,6 +433,15 @@ out-of-band so verifiers can pin it).
   re-delivery is a duplicate. Coinbase calls are mocked at the HTTP
   boundary — no live BTC charge has been run (no key here, and no
   sandbox exists for the Charge API); see `docs/crypto-payments.md`.
+- `api/tests/test_secrets.py` (2026-11-08): **23/23 pass** — T2 red-pen
+  FIX-FIRST items: signing secrets encrypted at rest (roundtrip, `enc:v1:`
+  prefix, ciphertext never contains the plaintext, fresh nonce each time,
+  tampered ciphertext and wrong key both raise, legacy plaintext rows still
+  read, signup stores ciphertext only, uploads still sign correctly against
+  the decrypted secret, backfill script encrypts legacy rows in place and is
+  idempotent); DATABASE_URL fail-fast (missing var refuses to start,
+  `ALLOW_SQLITE_DEV=1` opts into SQLite, explicit URL accepted, missing or
+  malformed encryption key refuses to start).
 - **Not run**: the Postgres migration (no Postgres available locally).
   It was carefully reviewed; run `supabase db push` (or paste into the SQL
   editor) on a real project to confirm.

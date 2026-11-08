@@ -11,10 +11,53 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _bool(name: str, default: bool) -> bool:
+    return os.environ.get(name, "1" if default else "0") not in ("0", "false", "False")
+
+
+# DATABASE_URL — T2 red-pen item 2: a missing value used to silently fall
+# back to local SQLite, so a production deploy with a missing/misspelled env
+# var would boot, answer health checks, and store everything in a throwaway
+# local file that vanishes on redeploy. Fail fast instead: the variable must
+# be set explicitly, or ALLOW_SQLITE_DEV=1 must opt into the local default.
+if "DATABASE_URL" in os.environ:
+    _DATABASE_URL = os.environ["DATABASE_URL"]
+elif _bool("ALLOW_SQLITE_DEV", False):
+    _DATABASE_URL = "sqlite:///./heart.db"
+else:
+    raise RuntimeError(
+        "DATABASE_URL environment variable must be set. "
+        "Set it to the Postgres connection string, or set ALLOW_SQLITE_DEV=1 "
+        "to use local SQLite for development."
+    )
+
+# SIGNING_SECRET_ENCRYPTION_KEY — T2 red-pen item 1: the 32-byte key that
+# encrypts api_keys.signing_secret at rest (NaCl SecretBox, see crypto.py).
+# 64 hex chars. No default — like ADMIN_TOKEN, the app refuses to start
+# without it, so a deploy can never silently store plaintext secrets.
+# Generate one with: python -c "import secrets; print(secrets.token_hex(32))"
+# Keep it outside the database and out of the repo — never commit it.
+_SIGNING_KEY_HEX = os.environ.get("SIGNING_SECRET_ENCRYPTION_KEY", "")
+if not _SIGNING_KEY_HEX:
+    raise RuntimeError(
+        "SIGNING_SECRET_ENCRYPTION_KEY environment variable must be set. "
+        "It is a 64-hex-char (32-byte) key used to encrypt api_keys.signing_secret "
+        "at rest. Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+try:
+    _SIGNING_KEY_BYTES = bytes.fromhex(_SIGNING_KEY_HEX)
+except ValueError:
+    raise RuntimeError("SIGNING_SECRET_ENCRYPTION_KEY must be 64 hex characters (32 bytes).")
+if len(_SIGNING_KEY_BYTES) != 32:
+    raise RuntimeError("SIGNING_SECRET_ENCRYPTION_KEY must be 64 hex characters (32 bytes).")
+
+
 class Settings:
-    # sqlite for local dev; postgres for Supabase/prod, e.g.
+    # sqlite for local dev (ALLOW_SQLITE_DEV=1); postgres for Supabase/prod, e.g.
     # postgresql+psycopg://postgres:PASSWORD@db.PROJECT.supabase.co:5432/postgres
-    DATABASE_URL: str = os.environ.get("DATABASE_URL", "sqlite:///./heart.db")
+    DATABASE_URL: str = _DATABASE_URL
+    # 32-byte key (64 hex chars) encrypting api_keys.signing_secret at rest.
+    SIGNING_SECRET_ENCRYPTION_KEY: str = _SIGNING_KEY_HEX
     UPLOAD_DIR: str = os.environ.get("UPLOAD_DIR", "./uploads")
     # No default — the admin revocation endpoint must never ship with a
     # publicly-known token. Fail fast at import if it is unset.

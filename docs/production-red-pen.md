@@ -13,24 +13,32 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
 
 ## FIX FIRST — unsafe or launch-blocking
 
-1. **FIX — Signing secrets are stored in plaintext in the database.**
-   `api_keys.signing_secret` is a 256-bit HMAC secret stored as hex in the
-   `api_keys` table (`api/app/crypto.py`, `supabase/migrations/20261011000000_heart_v1.sql`).
-   If the database leaks, anyone can forge provenance signatures for any
-   work — the whole "which key signed this" guarantee dies. The code already
-   flags it (`PRODUCTION TODO: move to KMS/vault`) and the README calls it
-   "acceptable for dev only". Before production: move signing secrets to a
-   KMS/vault (or encrypt them at rest with a key that lives outside the DB).
-   This is the single biggest secret-handling gap in the codebase.
+1. **FIXED (Nov 8, 2026) — Signing secrets are encrypted at rest.**
+   `api_keys.signing_secret` no longer stores plaintext. New rows store
+   `enc:v1:` + hex of a NaCl SecretBox (XSalsa20-Poly1305, authenticated
+   encryption) keyed by the 32-byte `SIGNING_SECRET_ENCRYPTION_KEY` env var
+   — the key lives outside the DB (KMS/vault pattern: the DB holds
+   ciphertext, the deploy environment holds the key). See
+   `api/app/crypto.py` (`encrypt_signing_secret` / `decrypt_signing_secret`).
+   The key is required at import, like `ADMIN_TOKEN` — the app refuses to
+   start without it, so a deploy can never silently store plaintext.
+   Column widened to `text` (migration
+   `20261108030000_heart_signing_secrets_encrypted.sql` — the encrypted
+   value is ~151 chars, too long for the old `varchar(128)`). Rows written
+   before the fix carry a bare hex secret; the read path still accepts
+   those, and `api/scripts/encrypt_signing_secrets.py` re-encrypts them in
+   place (idempotent, verifies each roundtrip before committing) — run it
+   before production, or rotate the keys. A DB leak now yields ciphertext
+   only; a wrong key or tampered value raises instead of returning a secret.
+   Verified by `api/tests/test_secrets.py` (23 checks).
 
-2. **FIX — A production deploy with no `DATABASE_URL` silently runs on local SQLite.**
-   `config.py` defaults `DATABASE_URL` to `sqlite:///./heart.db`, and
-   `main.py`'s lifespan runs `init_db()` (create-all) for any SQLite URL.
-   If the platform env var is missing or misspelled, the app boots, answers
-   health checks, and stores everything in a throwaway local file that
-   vanishes on redeploy — silently. No error, no warning. Fail fast instead:
-   require `DATABASE_URL` to be set explicitly in production (or require an
-   explicit `ALLOW_SQLITE_DEV` flag to use the SQLite default).
+2. **FIXED (Nov 8, 2026) — A missing `DATABASE_URL` fails fast.**
+   `config.py` no longer defaults to `sqlite:///./heart.db`. If
+   `DATABASE_URL` is unset and `ALLOW_SQLITE_DEV` is not truthy, the app
+   raises `RuntimeError` at import with a clear message — it cannot boot,
+   answer health checks, or store anything in a throwaway local file.
+   Local dev/tests set `ALLOW_SQLITE_DEV=1` (or an explicit `DATABASE_URL`).
+   Verified by `api/tests/test_secrets.py` (subprocess import checks).
 
 3. **FIX — The moderation classifier is a stub, and everything else auto-approves.**
    `api/app/moderation.py` enforces structural rules only (no executables,
@@ -158,8 +166,6 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
 ## Bottom line
 
 Nothing in the deployment setup is broken in a way that stops a first
-deploy — but items 1–5 are the ones that bite in production. Item 1
-(signing secrets in the DB) and item 2 (silent SQLite fallback) are the
-two that can silently destroy the trust story HeArt is built on; fix
-those before any real users arrive. Items 3–5 are launch config, not
-code rewrites. The rest is hygiene.
+deploy — but items 1–5 are the ones that bite in production. Items 1 and 2
+are FIXED (Nov 8, 2026 — encrypted signing secrets, DATABASE_URL fail-fast);
+items 3–5 are launch config, not code rewrites. The rest is hygiene.

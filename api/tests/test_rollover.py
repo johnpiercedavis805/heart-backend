@@ -39,6 +39,7 @@ TMP = tempfile.mkdtemp(prefix="heart_rollover_test_")
 os.environ["DATABASE_URL"] = f"sqlite:///{TMP}/test.db"
 os.environ["UPLOAD_DIR"] = f"{TMP}/uploads"
 os.environ["ADMIN_TOKEN"] = "test-admin-token"
+os.environ["SIGNING_SECRET_ENCRYPTION_KEY"] = "11" * 32  # test-only key; see test_secrets.py
 os.environ["MAX_WORKS_PER_DAY"] = "10"  # test process only; production default stays 1/day
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

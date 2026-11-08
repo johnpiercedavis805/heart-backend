@@ -36,7 +36,11 @@ class ApiKey(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    signing_secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Encrypted at rest (T2 red-pen item 1, Nov 8 2026): `enc:v1:` + hex of a
+    # NaCl SecretBox (nonce || ciphertext), ~151 chars. Legacy rows written
+    # before the fix carry a bare 64-hex-char secret — the read path still
+    # accepts those until they are re-encrypted or rotated.
+    signing_secret: Mapped[str] = mapped_column(String(256), nullable=False)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

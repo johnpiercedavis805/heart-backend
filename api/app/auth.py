@@ -78,7 +78,9 @@ def issue_key(db: Session, agent_id: str) -> tuple[ApiKey, str]:
     row = ApiKey(
         agent_id=agent_id,
         key_hash=crypto.hash_secret(plaintext),
-        signing_secret=crypto.new_signing_secret(),
+        # Encrypted at rest (T2 red-pen item 1): the DB holds SecretBox
+        # ciphertext keyed by SIGNING_SECRET_ENCRYPTION_KEY, never plaintext.
+        signing_secret=crypto.encrypt_signing_secret(crypto.new_signing_secret()),
         expires_at=utcnow() + timedelta(days=settings.KEY_ROTATION_DAYS),
         status="active",
     )
