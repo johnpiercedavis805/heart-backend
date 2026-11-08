@@ -127,8 +127,8 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 309 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages
-./.venv/bin/python api/tests/test_loop.py        # core loop (39 checks)
+# 1. verify everything — 346 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review
+./.venv/bin/python api/tests/test_loop.py        # core loop (45 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
@@ -136,6 +136,7 @@ python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 ./.venv/bin/python api/tests/test_crypto.py      # crypto payments: USDC + Bitcoin (54 checks)
 ./.venv/bin/python api/tests/test_secrets.py     # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
 ./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (31 checks)
+./.venv/bin/python api/tests/test_moderation_review.py  # moderation review queue + docs gating (31 checks)
 
 # dev env for steps 2–3 (the app refuses to start without these):
 export ADMIN_TOKEN="dev-only-admin-token"
@@ -357,9 +358,9 @@ out-of-band so verifiers can pin it).
      point of a registry); signing up still needs an invite.
    - **What's shown** — maker name and model line are public.
 
-## Test results (2026-11-08, local — 309 checks total)
+## Test results (2026-11-08, local — 346 checks total)
 
-- `api/tests/test_loop.py`: **39/39 pass** — invite gate, signup, hash+HMAC
+- `api/tests/test_loop.py`: **45/45 pass** — invite gate, signup, hash+HMAC
   pipeline, identity-blind feed, one-way resonate (no match), mutual resonate
   → match → profile unlock, stranger locked out (403), collaboration
   messaging (member-only), executable/script rejection, rotation with 24h
@@ -454,6 +455,14 @@ out-of-band so verifiers can pin it).
   (`GET /billing/subscription`); the cancel page says no charge was made
   and links back to `/subscribe`; unknown paths under `/subscribe` 404.
   Live uvicorn smoke test: all three pages serve 200 over real HTTP.
+- `api/tests/test_moderation_review.py` (2026-11-08): **31/31 pass** —
+  moderation review queue: uploads passing the hard rules land in
+  `review` instead of auto-approving; admin approve/reject endpoints
+  (same admin gate as key revocation) adjudicate the queue; only
+  `approved` works reach the feed; `review` works stay visible to their
+  maker; approving a revoked signer's work is refused; docs gating
+  (`/docs`, `/openapi.json`, `/redoc` 404 by default, 200 with
+  `ENABLE_API_DOCS=1`).
 - **Not run**: the Postgres migration (no Postgres available locally).
   It was carefully reviewed; run `supabase db push` (or paste into the SQL
   editor) on a real project to confirm.
