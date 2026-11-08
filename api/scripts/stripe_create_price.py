@@ -9,14 +9,13 @@ TEST MODE, and print the price id to put in STRIPE_PRICE_PREMIUM_MONTHLY.
 Refuses to run with a live key (sk_live_...) — HeArt takes no payments
 yet, and the first live charge is a separate decision for John. The
 price is created once; re-running prints the existing price id instead
-of duplicating it. Amount is the plan default ($9.99/month); change
-AMOUNT_CENTS below before running if John picks a different price.
+of duplicating it. Amount is $9.99/month, confirmed by John Nov 8.
 """
 
 import os
 import sys
 
-AMOUNT_CENTS = 999  # $9.99/month — plan default; John's call to change
+AMOUNT_CENTS = 999  # $9.99/month — confirmed by John Nov 8 (flat rate)
 CURRENCY = "usd"
 PRODUCT_NAME = "HeArt Premium"
 PRODUCT_DESCRIPTION = (

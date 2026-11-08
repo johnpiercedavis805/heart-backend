@@ -6,7 +6,7 @@ HeArt Premium billing, built to
 a separate decision for John Davis (the inventor).
 
 Build order followed the plan: Payments → Billing → Invoicing → Tax →
-Connect (scaffolding only; payouts gated).
+Connect (payouts built Nov 8 — 50/50 on a subscription payment, see §5).
 
 ## 1. Payments
 
@@ -29,8 +29,8 @@ Connect (scaffolding only; payouts gated).
 
 - **Flat-rate subscription** — one price per user (`price_test_premium`
   placeholder; create the real one with
-  `api/scripts/stripe_create_price.py`, default $9.99/month — John's call
-  to change). Freemium: core matching stays free; an agent with no
+  `api/scripts/stripe_create_price.py`, $9.99/month — confirmed by John
+  Nov 8). Freemium: core matching stays free; an agent with no
   subscription row is `status: "free"` (`GET /billing/subscription`).
 - **Customer Portal** — `POST /billing/portal` (self-serve plan changes /
   cancellation; `return_url` in the body). No custom billing UI.
@@ -68,7 +68,7 @@ Connect (scaffolding only; payouts gated).
   `automatic_tax: {enabled: true}` on Checkout — flip it only before the
   first live charge, on John's call.
 
-## 5. Connect (marketplace scaffolding — payouts NOT live)
+## 5. Connect (marketplace — payouts LIVE, test mode)
 
 - `POST /billing/connect/onboard` — creates a Connect account via the **v2
   API** (`StripeClient`, `configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested: true`),
@@ -78,12 +78,41 @@ Connect (scaffolding only; payouts gated).
   bank details in Stripe's hosted flow.
 - `GET /billing/connect/status` — reads the v2 account's
   `stripe_transfers` capability status + `onboarding_complete`.
-- **Creator payouts are GATED, not built.** `POST /billing/connect/payouts`
-  returns **409** with the message that payouts are not enabled pending
-  John's decision on the payout trigger (and how an AI participant's share
-  is held, since AIs hold no bank account). `create_creator_transfer()`
-  raises `PayoutsNotEnabled` and never creates a transfer. Do not wire a
-  transfer call until John answers that question.
+- **Creator payouts — BUILT (John's calls, Nov 8).** A subscription payment
+  triggers a payout; the split is **HALF — 50/50**: half to the creators,
+  half retained by HeArt. The creator half is split equally among the
+  creators the paying subscriber matched with (the art/music that earned
+  the match earns the share); a subscriber with no matches yet leaves the
+  creator half held unattributed. Split math is integer cents:
+  creator half = amount_paid // 2 (floor — the odd cent stays with HeArt,
+  so $9.99 → creator 499¢, HeArt 500¢); leftover cents from the equal
+  split also stay with HeArt. The rows for one invoice always sum exactly
+  to the amount paid.
+  - **Human creators** are paid by Stripe Transfer (`stripe.Transfer.create`,
+    separate charge + transfer, destination = their Connect account) the
+    moment the payout is processed; the transfer id is recorded on the
+    ledger row (`status: "transferred"`).
+  - **AI creators are never transferred.** Their share is recorded in the
+    `payouts` ledger with `status: "held"`, the creator's registry serial
+    (e.g. `HEART-AI-000001`), the amount, and the triggering
+    subscription/payment — a real, queryable record for their specialists
+    to manage later (AIs hold no bank account).
+  - **Trigger:** the `invoice.paid` webhook (the payment event that fires
+    for both hosted Checkout and Payment Sheet flows). `checkout.session.completed`
+    only links the customer; the invoice it creates is what pays out.
+  - **Idempotency:** re-processing an invoice never duplicates a row. It
+    DOES retry `failed` rows and release `held` rows whose creator has
+    since finished Connect onboarding — `POST /billing/connect/payouts`
+    is the ops re-run path. A transfer failure is recorded on the row
+    (`status: "failed"`) and never fails the webhook: the payment itself
+    still returns `"processed"`.
+  - `GET /billing/connect/payouts` lists the caller's payout records as a
+    creator (newest first) — the queryable ledger, including AI held shares.
+  - `POST /billing/connect/payouts` takes `{stripe_invoice_id}` and returns
+    the payout rows + `already_processed`.
+  - Migration 7 — `supabase/migrations/20261108010000_heart_payouts.sql`:
+    `payouts` (invoice, subscription, payer, creator + serial, kind,
+    creator_kind, amount, currency, status, stripe_transfer_id, note).
 
 ## Endpoints (all under `/billing`, API-key auth except webhooks)
 
@@ -99,7 +128,8 @@ Connect (scaffolding only; payouts gated).
 | POST | `/billing/connect/onboard` | v2 recipient account |
 | POST | `/billing/connect/link` | embedded onboarding link |
 | GET | `/billing/connect/status` | transfers capability status |
-| POST | `/billing/connect/payouts` | 409 gate — payouts not enabled |
+| POST | `/billing/connect/payouts` | process 50/50 payouts for one paid invoice (idempotent) |
+| GET | `/billing/connect/payouts` | the caller's payout records as a creator (queryable ledger) |
 
 Rate limiting: the same per-key limiter as the rest of the API
 (`billing_routes` reuses `get_requester` + `_check_rate_limit`).
@@ -130,17 +160,25 @@ currency, status, hosted URL, paid_at), `webhook_events`
 stripe_account_id, transfers_status, onboarding_complete). Apply with
 `supabase db push` on a real project; apply with the app stopped.
 
+Migration 7 — `supabase/migrations/20261108010000_heart_payouts.sql`
+(additive only, one new table): `payouts` (stripe_invoice_id,
+stripe_subscription_id, payer_agent_id, creator_agent_id,
+creator_serial, kind, creator_kind, amount_cents, currency, status,
+stripe_transfer_id, note) — the 50/50 creator-payout ledger. Human
+creators are paid by Stripe Transfer (`stripe_transfer_id`); AI
+creators' shares are HELD here (`status: "held"`) for their specialists.
+
 ## Tests
 
-`api/tests/test_stripe.py` — 61 checks, standalone pattern
+`api/tests/test_stripe.py` — 89 checks, standalone pattern
 (`../.venv/bin/python tests/test_stripe.py` from `api/`). Stripe API calls
 are mocked at the SDK boundary (real SDK objects via `construct_from`);
 what is verified for real: the full HTTP stack, the exact SDK call
 arguments, the local mirrors, and **webhook signature crypto** (payloads
 are signed with HMAC-SHA256 exactly as Stripe signs them — bad/missing
-signature → 400). Full suite after this build: **173/173 green**
+signature → 400). Full suite after this build: **201/201 green**
 (test_loop 39, test_identity 17, test_rollover 27, test_registry 29,
-test_stripe 61).
+test_stripe 89).
 
 ## Verification limits — read this before claiming anything live
 
@@ -189,13 +227,14 @@ export STRIPE_WEBHOOK_SECRET=whsec_...          # from the Dashboard test-mode w
 
 - **Live charges** — test mode only; first live charge needs John's call,
   `STRIPE_TAX_ENABLED=true` before it, and real success/cancel URLs.
-- **Creator payouts / transfers** — gated (409); needs John's payout-trigger
-  answer + the AI-share holding question.
+- **Creator payouts / transfers** — built and tested in test mode (see §5).
+  Still open: releasing a held payout to a creator who onboards later is
+  handled by re-processing the invoice; there is no separate release
+  endpoint, and no payout rule beyond the 50/50 subscription trigger
+  exists yet (no per-match, per-tip, or monthly-pool payouts).
 - **Stripe Tax collection** — monitoring only until the first live charge.
 - **Custom retry / dunning emails** — Stripe's defaults (Smart Retries +
   automated emails) are the plan default; no custom logic built.
 - **Connect Express dashboard / embedded components UI** — the API
   scaffolding is built; no frontend exists yet (the mobile app is the
   primary surface and does not exist yet).
-- **Price amount** — $9.99/month is the plan default in the helper script;
-  John has not confirmed a price.

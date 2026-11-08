@@ -43,7 +43,7 @@ heart-backend/
 │   ├── tests/test_identity.py  # identity + attestation (17 checks)
 │   ├── tests/test_rollover.py  # key rollover chain (27 checks)
 │   ├── tests/test_registry.py  # public identity registry (29 checks)
-│   └── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (61 checks)
+│   └── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (89 checks)
 ```
 
 **Stack choice: Python/FastAPI.** Single-process, dependency-light, and the
@@ -83,9 +83,10 @@ business event, auto-advance + charge automatically), `POST /billing/webhooks`
 `GET /billing/tax/status` (threshold monitoring only, no collection),
 `POST /billing/connect/onboard|link`, `GET /billing/connect/status` (v2
 recipient config, `stripe_transfers` capability).
-**Creator payouts are gated, not built** — `POST /billing/connect/payouts`
-returns 409 until John decides the payout trigger (and how an AI
-participant's share is held). Full write-up: `docs/stripe-integration.md`.
+**Creator payouts are built** (John's calls, Nov 8): `POST /billing/connect/payouts`
+processes the 50/50 split for one paid invoice — human creators by Stripe
+Transfer, AI creators' shares HELD in the queryable ledger
+(`GET /billing/connect/payouts`). Full write-up: `docs/stripe-integration.md`.
 Env vars: `STRIPE_SECRET_KEY` (test key only — a live key is refused while
 test-only is on), `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`,
 `STRIPE_PRICE_PREMIUM_MONTHLY` (create it with
@@ -114,7 +115,7 @@ python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
-./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (61 checks)
+./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (89 checks)
 
 # 2. mint an invite code (v1 is invite-only)
 ./.venv/bin/python api/scripts/mint_invite.py --note "who this is for"
@@ -358,7 +359,7 @@ out-of-band so verifiers can pin it).
   while the full file + history stay served, registration without auth
   rejected (401) while the registry stays public-read.
 - Live uvicorn smoke test: `/health` ok, bad key → 401, 11 MB upload → 413.
-- `api/tests/test_stripe.py` (2026-11-08): **61/61 pass** — billing disabled
+- `api/tests/test_stripe.py` (2026-11-08): **89/89 pass** — billing disabled
   without a key (503), live key refused in test-only mode, hosted Checkout
   (mode=subscription, flat-rate price, success/cancel URLs, agent metadata,
   automatic_tax only when tax enabled), Mobile Payment Sheet (customer
@@ -372,7 +373,10 @@ out-of-band so verifiers can pin it).
   `checkout.session.completed` customer linking, idempotent re-delivery
   (duplicate, processed once), Connect v2 recipient config +
   `stripe_transfers` requested, onboarding link (account_onboarding use
-  case), status reporting, creator payouts gated 409. Stripe API calls are
+  case), status reporting, creator payouts (50/50 on a subscription
+  payment — human creators by Stripe Transfer, AI creators HELD in the
+  ledger; webhook idempotent, endpoint re-run retries failed rows).
+  Stripe API calls are
   mocked at the SDK boundary — a live test-mode checkout (real Checkout
   Session + test card 4242) has NOT been run from this sandbox (no test key
   here, and the sandbox egress proxy breaks TLS to Stripe); see

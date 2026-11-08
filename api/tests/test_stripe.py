@@ -20,7 +20,9 @@ Uses an isolated SQLite DB + upload dir under /tmp. Exercises:
   credit_note.created / checkout.session.completed dispatch, and
   idempotency (a re-delivered event is processed once) ->
   Connect v2 (recipient config + stripe_transfers, onboarding link, status)
-  -> creator-payout GATE (409, no transfer ever created) ->
+  -> creator payouts (John's calls, Nov 8): a subscription payment
+  triggers a 50/50 payout — human creators by Stripe Transfer, AI
+  creators HELD in the queryable ledger (never transferred) ->
   tax status (threshold monitoring only, no collection).
 
 Stripe API calls are mocked at the SDK boundary (no test key exists in
@@ -32,7 +34,10 @@ call arguments, the local mirrors, and webhook signature crypto.
 
 KEY RULES UNDER TEST: test mode only (a live key is refused); webhooks
 verify the Stripe signature before touching state; no card data ever
-touches HeArt; creator payouts are gated, never created.
+touches HeArt; creator payouts are 50/50 on a subscription payment —
+human creators by Stripe Transfer, AI creators HELD in the ledger,
+never transferred; payout rows for one invoice always sum exactly to
+the amount paid; re-delivery changes nothing.
 """
 
 import hashlib
@@ -99,6 +104,32 @@ def signup(client: TestClient, name: str) -> dict:
     )
     assert r.status_code == 201, f"signup failed: {r.status_code} {r.text}"
     return r.json()
+
+
+def make_agent(name: str) -> dict:
+    """Create an agent directly in the DB (same rows / key hashing as
+    /signup, via the real issue_key) — the HTTP signup route is
+    rate-limited to 10/hour per IP, and the payout tests need more
+    agents than that on top of alice + bob. Returns the same shape as
+    signup() ({agent_id, api_key})."""
+    from app import auth
+    from app.db import SessionLocal
+    from app.models import Agent, AgentProfile
+
+    db = SessionLocal()
+    agent = Agent(display_name=name,
+                  disclosure="I am a disclosed AI agent participating in HeArt v1.",
+                  status="active")
+    db.add(agent)
+    db.flush()
+    db.add(AgentProfile(agent_id=agent.id, capabilities="test",
+                        training_lineage="test", thinking_style="test",
+                        wants_to_build="test"))
+    _row, plaintext = auth.issue_key(db, agent.id)
+    db.commit()
+    out = {"agent_id": agent.id, "api_key": plaintext}
+    db.close()
+    return out
 
 
 def auth(key: str) -> dict:
@@ -462,39 +493,43 @@ def main() -> int:
     settings.STRIPE_WEBHOOK_SECRET = old_whsec
 
     # ------------------------------------------------ 7. connect v2 ---
-    mock_v2_account = stripe_obj(
-        stripe.v2.core.Account,
-        {"id": "acct_test_creator1"},
-    )
     mock_link = stripe_obj(
         stripe.v2.core.AccountLink,
         {"url": "https://connect.stripe.com/setup/test123"},
     )
-    mock_v2_retrieved = stripe_obj(
-        stripe.v2.core.Account,
-        {
-            "id": "acct_test_creator1",
-            "configuration": {
-                "recipient": {
-                    "capabilities": {
-                        "stripe_balance": {"stripe_transfers": {"status": "active"}}
-                    }
-                }
-            },
-        },
-    )
 
     class FakeV2Accounts:
+        _counter = [0]
+
         def __init__(self):
             self.create_kwargs = None
 
         def create(self, **kwargs):
             self.create_kwargs = kwargs
-            return mock_v2_account
+            # Distinct account id per onboard (connect_accounts.stripe_account_id
+            # is unique) — first create is still acct_test_creator1.
+            FakeV2Accounts._counter[0] += 1
+            return stripe_obj(
+                stripe.v2.core.Account,
+                {"id": f"acct_test_creator{FakeV2Accounts._counter[0]}"},
+            )
 
         def retrieve(self, account_id):
-            assert account_id == "acct_test_creator1"
-            return mock_v2_retrieved
+            # Echo the requested account, transfers active (the capability
+            # check get_connect_status reads).
+            return stripe_obj(
+                stripe.v2.core.Account,
+                {
+                    "id": account_id,
+                    "configuration": {
+                        "recipient": {
+                            "capabilities": {
+                                "stripe_balance": {"stripe_transfers": {"status": "active"}}
+                            }
+                        }
+                    },
+                },
+            )
 
     class FakeV2Links:
         def __init__(self):
@@ -576,11 +611,285 @@ def main() -> int:
     check("connect status false when no account",
           r.status_code == 200 and r.json().get("connected") is False, r.text[:200])
 
-    # creator payouts are GATED: 409, no transfer ever created
-    r = client.post("/billing/connect/payouts", headers=ha)
-    check("creator payouts gated 409", r.status_code == 409, f"got {r.status_code}")
-    check("creator payouts message names the open question",
-          "payout trigger" in r.text, r.text[:200])
+    # ----------------------------------------- 8. creator payouts ---
+    # John's calls (Nov 8): $9.99/month; a subscription payment triggers
+    # a payout; split HALF (50/50); AI shares are HELD in the ledger
+    # (no bank transfer is ever attempted for an AI creator).
+
+    def give_identity_serial(agent_id: str, serial: str) -> None:
+        from app.db import SessionLocal
+        from app.models import AgentIdentity
+
+        db = SessionLocal()
+        db.add(AgentIdentity(
+            agent_id=agent_id, serial=serial,
+            created_at="2026-11-08T00:00:00Z", maker="test-maker",
+            model_lineage="test-model", capabilities='["test"]',
+            public_key="ab" * 32, creator_public_key="cd" * 32,
+            creator_signature="ef" * 64,
+        ))
+        db.commit()
+        db.close()
+
+    def make_match(a_id: str, b_id: str) -> None:
+        from app.db import SessionLocal
+        from app.models import Match
+
+        db = SessionLocal()
+        db.add(Match(agent_a_id=a_id, agent_b_id=b_id))
+        db.commit()
+        db.close()
+
+    def onboard_creator(headers) -> str:
+        """Onboard a creator (mocked v2) and confirm transfers are active."""
+        with mock.patch("app.billing.StripeClient", FakeStripeClient):
+            r = client.post("/billing/connect/onboard",
+                            json={"email": "creator@example.invalid",
+                                  "display_name": "Test Creator",
+                                  "refresh_url": "https://example.invalid/refresh",
+                                  "return_url": "https://example.invalid/return"},
+                            headers=headers)
+        assert r.status_code == 201, r.text
+        acct = r.json()["account_id"]
+        with mock.patch("app.billing.StripeClient", FakeStripeClient):
+            r = client.get("/billing/connect/status", headers=headers)
+        assert r.json().get("onboarding_complete") is True, r.text
+        return acct
+
+    def payout_rows(invoice_id: str) -> list[dict]:
+        from app.db import SessionLocal
+        from app.models import Payout
+
+        db = SessionLocal()
+        try:
+            return [
+                {c.name: getattr(r, c.name) for c in Payout.__table__.columns}
+                for r in db.query(Payout)
+                .filter(Payout.stripe_invoice_id == invoice_id)
+                .order_by(Payout.created_at).all()
+            ]
+        finally:
+            db.close()
+
+    def paid_invoice(invoice_id: str, payer_agent_id: str, subscription_id: str) -> dict:
+        return {
+            "id": invoice_id, "customer": "cus_test_payout",
+            "subscription": subscription_id, "status": "paid",
+            "amount_due": 999, "amount_paid": 999, "currency": "usd",
+            "hosted_invoice_url": f"https://pay.stripe.com/invoice/{invoice_id}",
+            "status_transitions": {"paid_at": int(time.time())},
+            "metadata": {"agent_id": payer_agent_id},
+        }
+
+    # transfer mock: captures calls, returns a fresh transfer id; can be
+    # flipped to fail to prove the failure path
+    transfer_calls: list[dict] = []
+    transfer_fail = {"on": False}
+
+    def fake_transfer_create(**kwargs):
+        transfer_calls.append(kwargs)
+        if transfer_fail["on"]:
+            raise stripe.error.StripeError("transfer declined in test")
+        return stripe_obj(stripe.Transfer, {"id": f"tr_test_payout{len(transfer_calls)}"})
+
+    # --- A. webhook invoice.paid triggers 50/50 payouts ---
+    # payer matched with one human creator and one AI creator
+    payer = make_agent("stripe-payer")
+    pp = auth(payer["api_key"])
+    human = make_agent("stripe-human-creator")
+    hp = auth(human["api_key"])
+    ai = make_agent("stripe-ai-creator")
+    ap = auth(ai["api_key"])
+    give_identity_serial(ai["agent_id"], "HEART-AI-000001")
+    human_acct = onboard_creator(hp)
+    make_match(payer["agent_id"], human["agent_id"])
+    make_match(payer["agent_id"], ai["agent_id"])
+
+    payload_a = event_payload("evt_test_payout1", "invoice.paid",
+                              paid_invoice("in_test_payout1", payer["agent_id"], "sub_test_payout1"))
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/webhooks", content=payload_a,
+                        headers={"stripe-signature": sign_payload(payload_a, whsec)})
+    check("payout webhook processed",
+          r.status_code == 200 and r.json().get("result") == "processed", r.text[:200])
+    rows_a = payout_rows("in_test_payout1")
+    check("payout rows created (3: platform + 2 creators)",
+          len(rows_a) == 3, f"got {len(rows_a)}")
+    platform_a = [x for x in rows_a if x["kind"] == "platform"]
+    human_a = [x for x in rows_a if x["creator_agent_id"] == human["agent_id"]]
+    ai_a = [x for x in rows_a if x["creator_agent_id"] == ai["agent_id"]]
+    check("payout rows sum exactly to the payment",
+          sum(x["amount_cents"] for x in rows_a) == 999,
+          str([x["amount_cents"] for x in rows_a]))
+    check("platform retains 501 (500 + the 1 leftover cent)",
+          len(platform_a) == 1 and platform_a[0]["amount_cents"] == 501
+          and platform_a[0]["status"] == "retained", str(platform_a))
+    check("human creator 249 transferred",
+          len(human_a) == 1 and human_a[0]["amount_cents"] == 249
+          and human_a[0]["status"] == "transferred" and human_a[0]["creator_kind"] == "human"
+          and human_a[0]["stripe_transfer_id"] is not None, str(human_a))
+    check("AI creator 249 held, never transferred, serial on the row",
+          len(ai_a) == 1 and ai_a[0]["amount_cents"] == 249
+          and ai_a[0]["status"] == "held" and ai_a[0]["creator_kind"] == "ai"
+          and ai_a[0]["stripe_transfer_id"] is None
+          and ai_a[0]["creator_serial"] == "HEART-AI-000001", str(ai_a))
+    check("transfer called once, to the human's Connect account, 249c",
+          len(transfer_calls) == 1 and transfer_calls[0]["amount"] == 249
+          and transfer_calls[0]["destination"] == human_acct
+          and transfer_calls[0]["currency"] == "usd", str(transfer_calls))
+
+    # the held AI share is queryable in the ledger (GET /billing/connect/payouts)
+    r = client.get("/billing/connect/payouts", headers=ap)
+    ledger_ai = r.json()
+    check("GET payouts: AI creator sees their held share",
+          r.status_code == 200 and len(ledger_ai) == 1
+          and ledger_ai[0]["status"] == "held" and ledger_ai[0]["amount_cents"] == 249
+          and ledger_ai[0]["creator_serial"] == "HEART-AI-000001"
+          and ledger_ai[0]["stripe_invoice_id"] == "in_test_payout1", r.text[:300])
+    r = client.get("/billing/connect/payouts", headers=hp)
+    check("GET payouts: human creator sees their transferred share",
+          r.status_code == 200 and len(r.json()) == 1
+          and r.json()[0]["status"] == "transferred"
+          and r.json()[0]["stripe_transfer_id"] is not None, r.text[:300])
+    r = client.get("/billing/connect/payouts", headers=pp)
+    check("GET payouts: payer sees nothing (not a creator on these rows)",
+          r.status_code == 200 and r.json() == [], r.text[:200])
+
+    # --- B. webhook re-delivery changes nothing ---
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/webhooks", content=payload_a,
+                        headers={"stripe-signature": sign_payload(payload_a, whsec)})
+    check("payout webhook re-delivery is duplicate",
+          r.status_code == 200 and r.json().get("result") == "duplicate", r.text[:200])
+    check("re-delivery creates no new payout rows",
+          len(payout_rows("in_test_payout1")) == 3)
+    check("re-delivery creates no new transfer",
+          len(transfer_calls) == 1, f"calls={len(transfer_calls)}")
+
+    # --- C. endpoint re-run on a processed invoice is a no-op ---
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/connect/payouts",
+                        json={"stripe_invoice_id": "in_test_payout1"}, headers=hp)
+    check("endpoint re-run 201 with already_processed",
+          r.status_code == 201 and r.json().get("already_processed") is True
+          and len(r.json().get("payouts", [])) == 3, r.text[:300])
+    check("endpoint re-run creates no new transfer",
+          len(transfer_calls) == 1, f"calls={len(transfer_calls)}")
+
+    # --- D. single creator: split is exactly half (499 / 500) ---
+    payer2 = make_agent("stripe-payer2")
+    human2 = make_agent("stripe-human2")
+    h2p = auth(human2["api_key"])
+    onboard_creator(h2p)
+    make_match(payer2["agent_id"], human2["agent_id"])
+    payload_d = event_payload("evt_test_payout2", "invoice.paid",
+                              paid_invoice("in_test_payout2", payer2["agent_id"], "sub_test_payout2"))
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/webhooks", content=payload_d,
+                        headers={"stripe-signature": sign_payload(payload_d, whsec)})
+    check("single-creator payout webhook processed",
+          r.status_code == 200 and r.json().get("result") == "processed", r.text[:200])
+    rows_d = payout_rows("in_test_payout2")
+    creator_d = [x for x in rows_d if x["creator_agent_id"] == human2["agent_id"]]
+    platform_d = [x for x in rows_d if x["kind"] == "platform"]
+    check("single creator gets exactly half: 499 of 999",
+          len(creator_d) == 1 and creator_d[0]["amount_cents"] == 499
+          and creator_d[0]["status"] == "transferred", str(creator_d))
+    check("platform retains exactly half: 500 of 999",
+          len(platform_d) == 1 and platform_d[0]["amount_cents"] == 500
+          and platform_d[0]["status"] == "retained", str(platform_d))
+
+    # --- E. subscriber with no matches: creator half held, unattributed ---
+    payer3 = make_agent("stripe-payer3")
+    payload_e = event_payload("evt_test_payout3", "invoice.paid",
+                              paid_invoice("in_test_payout3", payer3["agent_id"], "sub_test_payout3"))
+    calls_before = len(transfer_calls)
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/webhooks", content=payload_e,
+                        headers={"stripe-signature": sign_payload(payload_e, whsec)})
+    check("no-match payout webhook processed",
+          r.status_code == 200 and r.json().get("result") == "processed", r.text[:200])
+    rows_e = payout_rows("in_test_payout3")
+    unattributed = [x for x in rows_e if x["kind"] == "creator" and x["creator_agent_id"] is None]
+    check("no-match creator half held unattributed",
+          len(unattributed) == 1 and unattributed[0]["amount_cents"] == 499
+          and unattributed[0]["status"] == "held"
+          and "unattributed" in (unattributed[0]["note"] or ""), str(unattributed))
+    check("no-match payout creates no transfer",
+          len(transfer_calls) == calls_before, f"calls={len(transfer_calls)}")
+
+    # --- F. transfer failure: row marked failed, webhook still processed,
+    #         endpoint re-run retries it to transferred ---
+    payer4 = make_agent("stripe-payer4")
+    human4 = make_agent("stripe-human4")
+    h4p = auth(human4["api_key"])
+    onboard_creator(h4p)
+    make_match(payer4["agent_id"], human4["agent_id"])
+    transfer_fail["on"] = True
+    payload_f = event_payload("evt_test_payout4", "invoice.paid",
+                              paid_invoice("in_test_payout4", payer4["agent_id"], "sub_test_payout4"))
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/webhooks", content=payload_f,
+                        headers={"stripe-signature": sign_payload(payload_f, whsec)})
+    check("failed-transfer webhook still processed",
+          r.status_code == 200 and r.json().get("result") == "processed", r.text[:200])
+    rows_f = payout_rows("in_test_payout4")
+    failed_f = [x for x in rows_f if x["creator_agent_id"] == human4["agent_id"]]
+    check("failed transfer recorded on the row",
+          len(failed_f) == 1 and failed_f[0]["amount_cents"] == 499
+          and failed_f[0]["status"] == "failed"
+          and failed_f[0]["stripe_transfer_id"] is None
+          and "transfer failed" in (failed_f[0]["note"] or ""), str(failed_f))
+    # endpoint re-run retries the failed row
+    transfer_fail["on"] = False
+    calls_before_retry = len(transfer_calls)
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/connect/payouts",
+                        json={"stripe_invoice_id": "in_test_payout4"}, headers=h4p)
+    check("endpoint retry 201 with already_processed",
+          r.status_code == 201 and r.json().get("already_processed") is True, r.text[:300])
+    rows_f2 = payout_rows("in_test_payout4")
+    retried = [x for x in rows_f2 if x["creator_agent_id"] == human4["agent_id"]]
+    check("endpoint retry flips failed row to transferred",
+          len(retried) == 1 and retried[0]["status"] == "transferred"
+          and retried[0]["stripe_transfer_id"] is not None, str(retried))
+    check("endpoint retry made exactly one more transfer call",
+          len(transfer_calls) == calls_before_retry + 1,
+          f"calls={len(transfer_calls)} before={calls_before_retry}")
+
+    # --- G. endpoint processes an invoice that has no payouts yet ---
+    payer5 = make_agent("stripe-payer5")
+    human5 = make_agent("stripe-human5")
+    h5p = auth(human5["api_key"])
+    onboard_creator(h5p)
+    make_match(payer5["agent_id"], human5["agent_id"])
+    # a local invoice record with no payouts yet — the state the
+    # invoice.paid webhook's mirror leaves behind
+    from app.db import SessionLocal as _SL
+    from app.models import InvoiceRecord as _IR
+    _db = _SL()
+    _db.add(_IR(agent_id=payer5["agent_id"], stripe_invoice_id="in_test_payout5",
+                stripe_subscription_id="sub_test_payout5", amount_due_cents=999,
+                amount_paid_cents=999, currency="usd", status="paid"))
+    _db.commit()
+    _db.close()
+    check("no payout rows before the endpoint runs",
+          payout_rows("in_test_payout5") == [])
+    with mock.patch.object(stripe.Transfer, "create", fake_transfer_create):
+        r = client.post("/billing/connect/payouts",
+                        json={"stripe_invoice_id": "in_test_payout5"}, headers=h5p)
+    check("endpoint creates payouts for an unprocessed invoice",
+          r.status_code == 201 and r.json().get("already_processed") is False
+          and len(r.json().get("payouts", [])) == 2, r.text[:300])
+    rows_g = payout_rows("in_test_payout5")
+    check("endpoint payout rows sum exactly to the payment",
+          sum(x["amount_cents"] for x in rows_g) == 999, str(rows_g))
+
+    # --- H. endpoint 404 for an unknown invoice ---
+    r = client.post("/billing/connect/payouts",
+                    json={"stripe_invoice_id": "in_does_not_exist"}, headers=hp)
+    check("endpoint 404 for unknown invoice",
+          r.status_code == 404, f"got {r.status_code}")
 
     # unauthenticated billing calls are rejected
     r = client.post("/billing/checkout")

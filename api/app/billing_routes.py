@@ -11,7 +11,11 @@
   POST /billing/connect/onboard — create a Connect (v2 recipient) account for a creator
   POST /billing/connect/link    — embedded onboarding link for that account
   GET  /billing/connect/status  — Connect account + stripe_transfers capability state
-  POST /billing/connect/payouts — GATE: creator payouts are not enabled yet (409)
+  POST /billing/connect/payouts — process 50/50 payouts for one paid invoice
+                                  (idempotent; retries failed rows, releases held
+                                  rows whose creator has since onboarded)
+  GET  /billing/connect/payouts — the caller's payout records as a creator
+                                  (the queryable ledger, incl. AI held shares)
 
 Every endpoint except /billing/webhooks requires the caller's API key
 (the same auth as the rest of v1). Billing is disabled (503) while no
@@ -25,6 +29,7 @@ from sqlalchemy.orm import Session
 from . import billing
 from .config import settings
 from .db import get_db
+from .models import InvoiceRecord, Payout
 from .ratelimit import RateLimiter
 from .routes import get_requester
 from .schemas import (
@@ -37,6 +42,9 @@ from .schemas import (
     InvoiceCreateIn,
     InvoiceOut,
     PaymentSheetOut,
+    PayoutOut,
+    PayoutProcessIn,
+    PayoutProcessOut,
     PortalIn,
     PortalOut,
     SubscriptionOut,
@@ -61,8 +69,6 @@ def _check_rate_limit(key) -> None:
 def _billing_error(e: Exception) -> HTTPException:
     if isinstance(e, billing.BillingNotConfigured):
         return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
-    if isinstance(e, billing.PayoutsNotEnabled):
-        return HTTPException(status.HTTP_409_CONFLICT, str(e))
     if isinstance(e, billing.BillingError):
         return HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
     if isinstance(e, ValueError):
@@ -254,16 +260,60 @@ def connect_status(
         raise _billing_error(e)
 
 
-@router.post("/connect/payouts")
-def connect_payouts(requester=Depends(get_requester)):
-    """GATE: creator payouts are not enabled yet. The payout trigger
-    (what earns a payout) and how an AI participant's share is held are
-    still open questions for John. This endpoint exists so the client
-    gets a clean 'not yet' instead of a silent failure. No transfer is
-    created, by any path."""
+@router.post("/connect/payouts", response_model=PayoutProcessOut, status_code=status.HTTP_201_CREATED)
+def connect_payouts(
+    body: PayoutProcessIn,
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Process the 50/50 creator payouts for one PAID invoice (John's
+    calls, Nov 8: a subscription payment triggers a payout; half to the
+    creators the subscriber matched with, half retained by HeArt).
+    Idempotent: an invoice that already has payout rows returns them —
+    re-processing never duplicates a row; it DOES retry "failed" rows
+    and release "held" rows whose creator has since finished Connect
+    onboarding. Human creators are paid by Stripe Transfer; AI creators'
+    shares stay HELD in the ledger (no transfer is ever attempted for
+    an AI share). 404 when no local invoice record exists for the id."""
     _agent, key = requester
     _check_rate_limit(key)
+    invoice = (
+        db.query(InvoiceRecord)
+        .filter(InvoiceRecord.stripe_invoice_id == body.stripe_invoice_id)
+        .one_or_none()
+    )
+    if invoice is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"no invoice record for {body.stripe_invoice_id} — payouts "
+            "run off the invoice.paid webhook's local mirror.",
+        )
+    already_processed = (
+        db.query(Payout)
+        .filter(Payout.stripe_invoice_id == body.stripe_invoice_id)
+        .count()
+        > 0
+    )
     try:
-        billing.create_creator_transfer()
+        rows = billing.process_payouts_for_invoice(db, invoice)
     except Exception as e:
         raise _billing_error(e)
+    return PayoutProcessOut(
+        payouts=[PayoutOut(**billing.payout_to_dict(r)) for r in rows],
+        already_processed=already_processed,
+    )
+
+
+@router.get("/connect/payouts", response_model=list[PayoutOut])
+def connect_payouts_list(
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """The caller's payout records as a creator — the queryable ledger.
+    Includes AI held shares (with registry serial, amount, triggering
+    payment, status "held") for the creator's specialists to find, and
+    transferred/failed rows for human creators. Newest first."""
+    agent, key = requester
+    _check_rate_limit(key)
+    rows = billing.list_payouts_for_creator(db, agent.id)
+    return [PayoutOut(**billing.payout_to_dict(r)) for r in rows]

@@ -7,20 +7,28 @@ HeArt's servers — premium upgrades go through Stripe-hosted Checkout
 (App-to-Web) or the Mobile Payment Sheet; Stripe handles PCI, fraud, and
 payment-method optimization.
 
-Money flow (plan defaults): freemium core matching is free; premium is a
-flat-rate monthly subscription, payment info collected at upgrade, not
-signup. Subscriptions are self-serve via Stripe's Customer Portal.
-Revenue comes from user subscriptions, NOT a cut of creator payouts.
+Money flow (John's calls, Nov 8): freemium core matching is free; premium
+is a flat-rate monthly subscription ($9.99/month), payment info collected
+at upgrade, not signup. Subscriptions are self-serve via Stripe's Customer
+Portal. A subscription PAYMENT triggers a creator payout, split HALF —
+50/50: half to the creators, half retained by HeArt. The creator half is
+split equally among the creators the paying subscriber matched with (the
+art/music that earned the match earns the share); a subscriber with no
+matches yet leaves the creator half held unattributed. A HUMAN creator is
+paid by Stripe Transfer to their Connect account; an AI creator's share is
+HELD in the payout ledger (models.Payout) for their specialists — AIs hold
+no bank account, so no transfer is ever attempted for an AI share. Split
+math is integer cents: creator half = amount_paid // 2 (floor — the odd
+cent stays with HeArt, so $9.99 -> creator 499c, HeArt 500c).
 
-What is NOT built here (deliberate, John's open questions):
-  - Creator PAYOUTS (transfers). Connect account creation + onboarding +
-    status are built; create_creator_transfer() refuses — the payout
-    trigger (what earns a payout) and how an AI participant's share is
-    held (AIs hold no bank account) are still open. No transfer is ever
-    created.
+What is NOT built here (deliberate):
   - Stripe Tax COLLECTION. Threshold monitoring only (tax_status()).
     Collection starts before the first live charge, on John's call, by
     setting STRIPE_TAX_ENABLED=1.
+  - Releasing a HELD payout to a creator who onboards LATER is handled
+    by re-processing the invoice (POST /billing/connect/payouts) — the
+    held row is converted to a transfer once the creator's Connect
+    account is onboarding-complete. There is no separate release endpoint.
 
 Secrets live in environment variables only (config.settings). The webhook
 handler verifies the Stripe signature before touching any state.
@@ -34,9 +42,12 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .models import (
+    AgentIdentity,
     BillingCustomer,
     ConnectAccount,
     InvoiceRecord,
+    Match,
+    Payout,
     Subscription,
     WebhookEvent,
     utcnow,
@@ -56,11 +67,6 @@ class BillingNotConfigured(Exception):
 
 class BillingError(Exception):
     """A Stripe API call failed."""
-
-
-class PayoutsNotEnabled(Exception):
-    """Creator payouts are gated — the payout rule is still John's open
-    question. No transfer was (or can be) created."""
 
 
 # ------------------------------------------------------------------ setup ---
@@ -373,6 +379,25 @@ def handle_webhook_event(db: Session, event) -> str:
         result = _sync_subscription(db, obj)
     elif etype == "invoice.paid":
         result = _sync_invoice(db, obj, paid=True)
+        if result == "processed":
+            # A subscription payment triggers the creator payout (John's
+            # call, Nov 8): the paid invoice is split 50/50, creator half
+            # to the creators the subscriber matched with, half retained
+            # by HeArt. process_payouts_for_invoice is idempotent — a
+            # re-processed invoice returns its existing rows.
+            #
+            # NOTE: this session is autoflush=False, so the mirror row
+            # _sync_invoice just added is still pending — flush it before
+            # querying for it, or the lookup silently returns None and
+            # the payout is skipped entirely.
+            db.flush()
+            row = (
+                db.query(InvoiceRecord)
+                .filter(InvoiceRecord.stripe_invoice_id == _get(obj, "id"))
+                .one_or_none()
+            )
+            if row is not None and (row.amount_paid_cents or 0) > 0:
+                process_payouts_for_invoice(db, row)
     elif etype == "invoice.payment_failed":
         # The payment failed: mirror the invoice and mark the linked
         # subscription past_due, so Smart Retries can work the recovery.
@@ -543,11 +568,15 @@ def _on_credit_note_created(db: Session, note) -> str:
 
 
 # ------------------------------------------------------------ connect v2 ---
-# Creator payouts: account creation + onboarding + status are built.
-# TRANSFERS are deliberately not built — see create_creator_transfer().
-# Connect v2 lives behind StripeClient (the v1 module API has no v2
-# resources); the client is built lazily so billing imports cleanly even
-# where Connect is never used.
+# Creator payouts: account creation + onboarding + status are built, and
+# payouts are LIVE (John's calls, Nov 8): a subscription payment triggers
+# a payout, split 50/50 — half to the creators the subscriber matched
+# with, half retained by HeArt. Humans are paid by Stripe Transfer to
+# their Connect account; an AI creator's share is HELD in the payout
+# ledger (models.Payout) for their specialists — no transfer is ever
+# attempted for an AI share. Connect v2 lives behind StripeClient (the
+# v1 module API has no v2 resources); the client is built lazily so
+# billing imports cleanly even where Connect is never used.
 
 
 def _v2_client():
@@ -664,17 +693,340 @@ def get_connect_status(db: Session, agent_id: str) -> dict:
     }
 
 
-def create_creator_transfer(*args, **kwargs):
-    """GATE — deliberately unimplemented. Creator payouts need two of
-    John's decisions first: (b) what triggers a payout (art used in a
-    match? monthly share? tips?), and how an AI participant's share is
-    held or used (AIs hold no bank account). Until he answers, no
-    transfer is created, by any path. When he does, this is where the
-    transfer call (destination charge / v2 payout intent) lands."""
-    raise PayoutsNotEnabled(
-        "Creator payouts are not enabled yet: the payout trigger and how "
-        "an AI participant's share is held are still open questions for "
-        "John. No transfer was created."
+def create_creator_transfer(
+    db: Session,
+    agent_id: str,
+    amount_cents: int,
+    *,
+    currency: str = "usd",
+    stripe_invoice_id: str | None = None,
+) -> dict:
+    """Pay one HUMAN creator their share by Stripe Transfer (separate
+    charge + transfer: the subscription was already charged to the
+    platform, so the creator's half moves from the platform balance to
+    their Connect account). Only ever called for a creator whose Connect
+    account is onboarding-complete — AI creators never reach here (their
+    share is held in the ledger; see process_payouts_for_invoice).
+    Returns the transfer id + destination. Raises BillingError on a
+    Stripe failure, BillingNotConfigured when the creator has no Connect
+    account at all."""
+    if amount_cents <= 0:
+        raise ValueError("amount_cents must be positive")
+    account = db.get(ConnectAccount, agent_id)
+    if account is None:
+        raise BillingNotConfigured(
+            "no Connect account for this creator — create one first "
+            "(POST /billing/connect/onboard) and finish onboarding."
+        )
+    s = _stripe()
+    metadata = {"agent_id": agent_id}
+    if stripe_invoice_id:
+        metadata["stripe_invoice_id"] = stripe_invoice_id
+    try:
+        transfer = s.Transfer.create(
+            amount=amount_cents,
+            currency=currency,
+            destination=account.stripe_account_id,
+            metadata=metadata,
+        )
+    except stripe.error.StripeError as e:
+        raise BillingError(f"Stripe transfer creation failed: {e}") from e
+    return {
+        "transfer_id": transfer["id"],
+        "amount_cents": amount_cents,
+        "currency": currency,
+        "destination_account_id": account.stripe_account_id,
+    }
+
+
+# ------------------------------------------------------- creator payouts ---
+# John's calls (Nov 8): HeArt Premium $9.99/month flat rate; a subscription
+# payment triggers a payout; the split is HALF — 50/50, creator half vs
+# HeArt half; an AI participant's share is held in the payout ledger for
+# their specialists (AIs hold no bank account — no transfer is ever
+# attempted for an AI share).
+#
+# Attribution (v1): the creator half is split equally among the creators
+# the paying subscriber matched with — the art/music that earned the
+# match earns the share. A subscriber with no matches yet leaves the
+# whole creator half held unattributed, so the money is accounted for
+# and attributable later.
+#
+# Split math is integer cents (a cent cannot be split): creator half =
+# amount_paid // 2 (floor — the odd cent stays with HeArt, so $9.99 ->
+# creator 499c, HeArt 500c); the creator half is split equally among the
+# creators, and leftover cents from that equal split also stay with
+# HeArt. The rows for one invoice always sum exactly to the amount paid.
+
+
+def _matched_creators(db: Session, payer_agent_id: str) -> list[str]:
+    """Creators the paying subscriber matched with — the other side of
+    each of their matches, deduplicated, never the payer themselves."""
+    rows = (
+        db.query(Match)
+        .filter(
+            (Match.agent_a_id == payer_agent_id)
+            | (Match.agent_b_id == payer_agent_id)
+        )
+        .all()
+    )
+    creators: list[str] = []
+    for row in rows:
+        other = row.agent_b_id if row.agent_a_id == payer_agent_id else row.agent_a_id
+        if other != payer_agent_id and other not in creators:
+            creators.append(other)
+    return creators
+
+
+def _creator_serial(db: Session, agent_id: str) -> str | None:
+    """Registry serial for a creator (HEART-AI-000001), or None when the
+    creator has not registered an identity yet. The held ledger row
+    carries the serial so the creator's specialists can find their
+    share."""
+    row = db.get(AgentIdentity, agent_id)
+    return row.serial if row is not None else None
+
+
+def _transfer_ready_account(db: Session, agent_id: str) -> ConnectAccount | None:
+    """The creator's Connect account when it can receive a transfer: an
+    account exists AND onboarding is complete (onboarding_complete is
+    set only once Stripe reports stripe_transfers active — see
+    get_connect_status). Anything else (no account, onboarding
+    incomplete) means the creator cannot be paid by transfer yet, and
+    their share is HELD instead."""
+    row = db.get(ConnectAccount, agent_id)
+    if row is not None and row.onboarding_complete:
+        return row
+    return None
+
+
+def _create_creator_payout(
+    db: Session,
+    invoice: InvoiceRecord,
+    creator_agent_id: str | None,
+    amount_cents: int,
+    *,
+    note: str | None = None,
+) -> Payout:
+    """One creator's share row. Routes by Connect readiness: an
+    onboarding-complete Connect account -> Stripe Transfer (human);
+    anything else -> HELD in the ledger (AI creator, or a human who
+    hasn't finished onboarding yet). A failed transfer is recorded on
+    the row (status "failed") and never raised — the payment itself is
+    still recorded as processed."""
+    if creator_agent_id is None:
+        row = Payout(
+            stripe_invoice_id=invoice.stripe_invoice_id,
+            stripe_subscription_id=invoice.stripe_subscription_id,
+            payer_agent_id=invoice.agent_id,
+            creator_agent_id=None,
+            creator_serial=None,
+            kind="creator",
+            creator_kind=None,
+            amount_cents=amount_cents,
+            currency=invoice.currency or "usd",
+            status="held",
+            stripe_transfer_id=None,
+            note=note,
+        )
+        db.add(row)
+        return row
+    serial = _creator_serial(db, creator_agent_id)
+    if _transfer_ready_account(db, creator_agent_id) is None:
+        # AI creator (v1 is AI-only; an AI cannot complete Connect
+        # onboarding, so it has no bank-backed account) — or a human who
+        # hasn't finished onboarding. Either way: NO bank transfer is
+        # ever attempted. The share is held here, with the creator's
+        # registry serial, for their specialists.
+        row = Payout(
+            stripe_invoice_id=invoice.stripe_invoice_id,
+            stripe_subscription_id=invoice.stripe_subscription_id,
+            payer_agent_id=invoice.agent_id,
+            creator_agent_id=creator_agent_id,
+            creator_serial=serial,
+            kind="creator",
+            creator_kind="ai",
+            amount_cents=amount_cents,
+            currency=invoice.currency or "usd",
+            status="held",
+            stripe_transfer_id=None,
+            note=note or "held for the creator's specialists — AIs hold no bank account",
+        )
+        db.add(row)
+        return row
+    try:
+        transfer = create_creator_transfer(
+            db,
+            creator_agent_id,
+            amount_cents,
+            currency=invoice.currency or "usd",
+            stripe_invoice_id=invoice.stripe_invoice_id,
+        )
+    except (BillingError, BillingNotConfigured, ValueError) as e:
+        row = Payout(
+            stripe_invoice_id=invoice.stripe_invoice_id,
+            stripe_subscription_id=invoice.stripe_subscription_id,
+            payer_agent_id=invoice.agent_id,
+            creator_agent_id=creator_agent_id,
+            creator_serial=serial,
+            kind="creator",
+            creator_kind="human",
+            amount_cents=amount_cents,
+            currency=invoice.currency or "usd",
+            status="failed",
+            stripe_transfer_id=None,
+            note=f"transfer failed: {e}",
+        )
+        db.add(row)
+        return row
+    row = Payout(
+        stripe_invoice_id=invoice.stripe_invoice_id,
+        stripe_subscription_id=invoice.stripe_subscription_id,
+        payer_agent_id=invoice.agent_id,
+        creator_agent_id=creator_agent_id,
+        creator_serial=serial,
+        kind="creator",
+        creator_kind="human",
+        amount_cents=amount_cents,
+        currency=invoice.currency or "usd",
+        status="transferred",
+        stripe_transfer_id=transfer["transfer_id"],
+        note=None,
+    )
+    db.add(row)
+    return row
+
+
+def _retry_payout_rows(db: Session, rows: list[Payout]) -> None:
+    """Re-process existing payout rows (POST /billing/connect/payouts
+    re-run): retry "failed" rows, and release "held" rows whose creator
+    has since finished Connect onboarding. Rows already "transferred"
+    or "retained" are untouched. A retry that fails again stays
+    "failed" with the new error — nothing here raises."""
+    for row in rows:
+        if row.kind != "creator" or row.creator_agent_id is None:
+            continue
+        if row.status not in ("failed", "held"):
+            continue
+        if _transfer_ready_account(db, row.creator_agent_id) is None:
+            continue  # still cannot be paid by transfer; stays held/failed
+        try:
+            transfer = create_creator_transfer(
+                db,
+                row.creator_agent_id,
+                row.amount_cents,
+                currency=row.currency,
+                stripe_invoice_id=row.stripe_invoice_id,
+            )
+        except (BillingError, BillingNotConfigured, ValueError) as e:
+            row.status = "failed"
+            row.note = f"transfer failed: {e}"
+            continue
+        row.status = "transferred"
+        row.stripe_transfer_id = transfer["transfer_id"]
+        row.creator_kind = "human"
+        row.note = None
+
+
+def process_payouts_for_invoice(db: Session, invoice: InvoiceRecord) -> list[Payout]:
+    """Create (or re-process) the 50/50 payout records for one PAID
+    invoice. Called from the invoice.paid webhook and from POST
+    /billing/connect/payouts (the ops re-run path).
+
+    Idempotent: an invoice that already has payout rows returns them —
+    re-processing never duplicates a row. It DOES retry "failed" rows
+    and release "held" rows whose creator has since finished Connect
+    onboarding. A transfer failure is recorded on the row and never
+    raised, so the webhook still returns "processed" for the payment.
+
+    Returns the payout rows for the invoice (platform row included),
+    oldest first. An invoice with nothing paid returns []."""
+    total = int(invoice.amount_paid_cents or 0)
+    if total <= 0:
+        return []
+    existing = (
+        db.query(Payout)
+        .filter(Payout.stripe_invoice_id == invoice.stripe_invoice_id)
+        .order_by(Payout.created_at)
+        .all()
+    )
+    if existing:
+        _retry_payout_rows(db, existing)
+        db.commit()
+        return existing
+    creator_half = total // 2  # floor; the odd cent stays with HeArt
+    platform_half = total - creator_half
+    creators = _matched_creators(db, invoice.agent_id)
+    rows: list[Payout] = []
+    # HeArt's retained half first. It also absorbs the equal-split
+    # leftover, if any, so the rows always sum exactly to the payment.
+    platform_row = Payout(
+        stripe_invoice_id=invoice.stripe_invoice_id,
+        stripe_subscription_id=invoice.stripe_subscription_id,
+        payer_agent_id=invoice.agent_id,
+        creator_agent_id=None,
+        creator_serial=None,
+        kind="platform",
+        creator_kind=None,
+        amount_cents=platform_half,
+        currency=invoice.currency or "usd",
+        status="retained",
+        stripe_transfer_id=None,
+        note="HeArt's retained half (50/50 split)",
+    )
+    db.add(platform_row)
+    rows.append(platform_row)
+    if not creators:
+        # No matches yet: the whole creator half is held, attributed to
+        # nobody, so the money is accounted for and attributable later.
+        rows.append(
+            _create_creator_payout(
+                db,
+                invoice,
+                None,
+                creator_half,
+                note="unattributed — subscriber has no matches yet; held for later attribution",
+            )
+        )
+    else:
+        per_creator = creator_half // len(creators)
+        leftover = creator_half - per_creator * len(creators)
+        platform_row.amount_cents += leftover
+        for creator_id in creators:
+            rows.append(_create_creator_payout(db, invoice, creator_id, per_creator))
+    db.commit()
+    return rows
+
+
+def payout_to_dict(row: Payout) -> dict:
+    """One ledger row as the API returns it."""
+    return {
+        "id": row.id,
+        "stripe_invoice_id": row.stripe_invoice_id,
+        "stripe_subscription_id": row.stripe_subscription_id,
+        "payer_agent_id": row.payer_agent_id,
+        "creator_agent_id": row.creator_agent_id,
+        "creator_serial": row.creator_serial,
+        "kind": row.kind,
+        "creator_kind": row.creator_kind,
+        "amount_cents": row.amount_cents,
+        "currency": row.currency,
+        "status": row.status,
+        "stripe_transfer_id": row.stripe_transfer_id,
+        "note": row.note,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def list_payouts_for_creator(db: Session, agent_id: str) -> list[Payout]:
+    """The caller's payout records as a creator (transferred, held,
+    failed) — the queryable ledger for a creator and their specialists.
+    Newest first."""
+    return (
+        db.query(Payout)
+        .filter(Payout.creator_agent_id == agent_id)
+        .order_by(Payout.created_at.desc())
+        .all()
     )
 
 

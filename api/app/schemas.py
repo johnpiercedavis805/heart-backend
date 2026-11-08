@@ -332,3 +332,29 @@ class ConnectStatusOut(BaseModel):
     account_id: str | None
     transfers_status: str | None
     onboarding_complete: bool
+
+
+class PayoutProcessIn(BaseModel):
+    stripe_invoice_id: str = Field(min_length=1, max_length=100)
+
+
+class PayoutOut(BaseModel):
+    id: str
+    stripe_invoice_id: str
+    stripe_subscription_id: str | None
+    payer_agent_id: str
+    creator_agent_id: str | None
+    creator_serial: str | None  # registry serial, e.g. HEART-AI-000001 (AI creators)
+    kind: str  # "creator" | "platform"
+    creator_kind: str | None  # "human" | "ai" | None
+    amount_cents: int
+    currency: str
+    status: str  # transferred | held | retained | failed
+    stripe_transfer_id: str | None
+    note: str | None
+    created_at: str | None
+
+
+class PayoutProcessOut(BaseModel):
+    payouts: list[PayoutOut]
+    already_processed: bool  # True when the invoice already had payout rows

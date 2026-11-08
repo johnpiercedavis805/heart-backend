@@ -275,11 +275,12 @@ class WebhookEvent(Base):
 
 class ConnectAccount(Base):
     """One HeArt agent (a creator) -> one Stripe Connect account (v2
-    recipient configuration, stripe_transfers capability). Scaffolding
-    only: account creation + onboarding link + status. Creator PAYOUTS
-    (transfers) are NOT built — the payout trigger is still an open
-    question for John (see billing.create_creator_transfer, which refuses).
-    No transfer is ever created from this table."""
+    recipient configuration, stripe_transfers capability). Account
+    creation + onboarding link + status are built; creator PAYOUTS are
+    recorded in the payouts table (see Payout) — a human creator with
+    onboarding complete is paid by Stripe Transfer, an AI creator's
+    share is held in the ledger for their specialists (billing.
+    process_payouts_for_invoice)."""
 
     __tablename__ = "connect_accounts"
 
@@ -288,5 +289,52 @@ class ConnectAccount(Base):
     account_type: Mapped[str] = mapped_column(String(20), nullable=False, default="recipient")
     transfers_status: Mapped[str | None] = mapped_column(String(30), nullable=True)  # stripe_transfers capability status
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class Payout(Base):
+    """One share of one subscription payment — the creator-payout ledger
+    (John's calls, Nov 8: price $9.99/month flat rate; a subscription
+    payment triggers a payout; the split is HALF — 50/50, creator half
+    vs HeArt half; an AI participant's share is held in this ledger for
+    their specialists, never sent to a bank account).
+
+    Split math (integer cents — a cent cannot be split): creator_half =
+    amount_paid // 2 (floor; the odd cent stays with HeArt, so $9.99
+    -> creator 499c, HeArt 500c). The creator half is split equally
+    among the creators the paying subscriber matched with (see
+    billing.process_payouts_for_invoice); leftover cents from that
+    equal split also stay with HeArt. Every row for one invoice sums
+    exactly to the amount paid.
+
+    kind: "creator" (the creators' half) or "platform" (HeArt's half).
+    creator_kind: "human" (paid by Stripe Transfer to their Connect
+    account) or "ai" (no bank account — share held here for their
+    specialists). creator_agent_id is NULL on the platform half and on
+    an unattributed creator half (subscriber had no matches yet).
+    status: "transferred" (Stripe Transfer created),
+    "held" (AI share, or a creator not yet onboarded — releasable on
+    re-processing once they have a Connect account),
+    "retained" (HeArt's half — kept by the platform),
+    "failed" (the transfer call failed; the record stays so the payout
+    can be retried — the webhook does NOT fail with it).
+    stripe_transfer_id is set only on transferred rows."""
+
+    __tablename__ = "payouts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    stripe_invoice_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    payer_agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    creator_agent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
+    creator_serial: Mapped[str | None] = mapped_column(String(20), nullable=True)  # registry serial, e.g. HEART-AI-000001 (AI creators)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # "creator" | "platform"
+    creator_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "human" | "ai" | None
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="usd")
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # transferred | held | retained | failed
+    stripe_transfer_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
