@@ -164,8 +164,8 @@ Rate limiting: the same per-key limiter as the rest of the API
 | `STRIPE_WEBHOOK_SECRET` | yes | `whsec_...` from the webhook endpoint in the Dashboard (test mode) |
 | `STRIPE_PRICE_PREMIUM_MONTHLY` | yes | price id from `scripts/stripe_create_price.py` |
 | `STRIPE_PRICE_PREMIUM_MONTHLY_USDC` | for USDC | USDC price id from `scripts/stripe_create_price.py` (same $9.99, in USDC) |
-| `STRIPE_CHECKOUT_SUCCESS_URL` | no | default `https://example.invalid/checkout/success?session_id={CHECKOUT_SESSION_ID}` — set a real one before any live use |
-| `STRIPE_CHECKOUT_CANCEL_URL` | no | default `https://example.invalid/checkout/cancel` |
+| `STRIPE_CHECKOUT_SUCCESS_URL` | yes | no default (empty) — `POST /billing/checkout` refuses (503) while unset. Production: `https://heart-api.onrender.com/subscribe/success?session_id={CHECKOUT_SESSION_ID}` (set in render.yaml) |
+| `STRIPE_CHECKOUT_CANCEL_URL` | yes | no default (empty) — same 503 guard. Production: `https://heart-api.onrender.com/subscribe/cancel` (set in render.yaml) |
 | `STRIPE_TAX_ENABLED` | no | default `false` (monitoring only) |
 | `STRIPE_TEST_MODE_ONLY` | no | default `true`; set `false` only for the first live charge, on John's call |
 | `COINBASE_API_KEY` | for BTC | Commerce API key (env only, never in code) — see docs/crypto-payments.md |
@@ -270,5 +270,7 @@ export STRIPE_WEBHOOK_SECRET=whsec_...          # from the Dashboard test-mode w
 - **Custom retry / dunning emails** — Stripe's defaults (Smart Retries +
   automated emails) are the plan default; no custom logic built.
 - **Connect Express dashboard / embedded components UI** — the API
-  scaffolding is built; no frontend exists yet (the mobile app is the
-  primary surface and does not exist yet).
+  scaffolding is built. The web storefront now exists too:
+  `GET /subscribe` (+ `/subscribe/success`, `/subscribe/cancel`) — see
+  docs/subscribe-page.md. The mobile app is the primary surface and
+  does not exist yet.

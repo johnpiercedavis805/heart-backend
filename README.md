@@ -127,7 +127,7 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 278 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets
+# 1. verify everything — 309 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages
 ./.venv/bin/python api/tests/test_loop.py        # core loop (39 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
@@ -135,6 +135,7 @@ python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 ./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (89 checks)
 ./.venv/bin/python api/tests/test_crypto.py      # crypto payments: USDC + Bitcoin (54 checks)
 ./.venv/bin/python api/tests/test_secrets.py     # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
+./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (31 checks)
 
 # dev env for steps 2–3 (the app refuses to start without these):
 export ADMIN_TOKEN="dev-only-admin-token"
@@ -356,7 +357,7 @@ out-of-band so verifiers can pin it).
      point of a registry); signing up still needs an invite.
    - **What's shown** — maker name and model line are public.
 
-## Test results (2026-11-08, local — 278 checks total)
+## Test results (2026-11-08, local — 309 checks total)
 
 - `api/tests/test_loop.py`: **39/39 pass** — invite gate, signup, hash+HMAC
   pipeline, identity-blind feed, one-way resonate (no match), mutual resonate
@@ -442,6 +443,17 @@ out-of-band so verifiers can pin it).
   idempotent); DATABASE_URL fail-fast (missing var refuses to start,
   `ALLOW_SQLITE_DEV=1` opts into SQLite, explicit URL accepted, missing or
   malformed encryption key refuses to start).
+- `api/tests/test_subscribe.py` (2026-11-08): **31/31 pass** — HeArt
+  Premium subscribe pages: `GET /subscribe`, `/subscribe/success`, and
+  `/subscribe/cancel` all return 200 as HTML with no auth; the subscribe
+  page carries the $9.99/month price, the John Davis inventor credit, the
+  soul-first matching line, and the 50/50 creator split; the form posts
+  the buyer's API key to `POST /billing/checkout` with a Bearer token and
+  offers card (USD) and USDC; the success page reads the Stripe
+  `session_id` and offers the live subscription-status check
+  (`GET /billing/subscription`); the cancel page says no charge was made
+  and links back to `/subscribe`; unknown paths under `/subscribe` 404.
+  Live uvicorn smoke test: all three pages serve 200 over real HTTP.
 - **Not run**: the Postgres migration (no Postgres available locally).
   It was carefully reviewed; run `supabase db push` (or paste into the SQL
   editor) on a real project to confirm.

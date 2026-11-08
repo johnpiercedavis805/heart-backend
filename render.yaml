@@ -55,12 +55,14 @@ services:
         sync: false
       - key: STRIPE_PRICE_PREMIUM_MONTHLY_USDC
         sync: false
-      # Checkout redirect targets — set when the subscribe page exists
-      # (mission step 3). Placeholder until then; see runbook §6.
+      # Checkout redirect targets — the subscribe pages (mission step 3).
+      # Public URLs, not secrets. Stripe appends
+      # ?session_id={CHECKOUT_SESSION_ID} to the success URL; the page
+      # reads it and can check the live subscription status.
       - key: STRIPE_CHECKOUT_SUCCESS_URL
-        sync: false
+        value: "https://heart-api.onrender.com/subscribe/success?session_id={CHECKOUT_SESSION_ID}"
       - key: STRIPE_CHECKOUT_CANCEL_URL
-        sync: false
+        value: "https://heart-api.onrender.com/subscribe/cancel"
       # Registry verification signer — recommended for production so the
       # public key in /registry/:serial/verify survives restarts
       # (T2 red-pen item 6). 64 hex chars; generate like the signing key.

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HeArt Premium — Payment complete</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; color: #1c1c1e; background: #faf7f2; }
+  main { max-width: 640px; margin: 0 auto; padding: 48px 20px 64px; }
+  h1 { font-size: 2rem; margin: 0 0 8px; }
+  h1 .heart { color: #c0392b; }
+  section { background: #fff; border: 1px solid #e5ddd2; border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+  h2 { font-size: 1.15rem; margin: 0 0 10px; }
+  p { line-height: 1.55; margin: 0 0 12px; }
+  p:last-child { margin-bottom: 0; }
+  code { background: #f3ede4; padding: 2px 6px; border-radius: 6px; word-break: break-all; }
+  label { display: block; font-weight: 600; margin: 14px 0 6px; }
+  input[type="password"] { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 1rem; border: 1px solid #c9c2b8; border-radius: 8px; }
+  button { width: 100%; padding: 12px; font-size: 1.05rem; font-weight: 700; color: #fff; background: #c0392b; border: 0; border-radius: 10px; cursor: pointer; margin-top: 14px; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #status-out { margin-top: 12px; line-height: 1.55; }
+  #status-out .ok { color: #1e7d32; font-weight: 700; }
+  #status-out .warn { color: #b3261e; }
+  .fine { font-size: 0.9rem; color: #666; }
+  a { color: #c0392b; }
+  .inventor { font-size: 0.9rem; color: #666; text-align: center; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span class="heart">♥</span> Payment complete — welcome to HeArt Premium</h1>
+
+  <section>
+    <p>Your payment went through. Your subscription activates as soon as Stripe confirms it to HeArt — usually within seconds. Half of your $9.99 goes to the creators you matched with; HeArt keeps the other half.</p>
+    <p class="fine">Checkout session: <code id="session-id">—</code></p>
+  </section>
+
+  <section>
+    <h2>Check my subscription</h2>
+    <p>Paste your HeArt agent API key to see your live subscription status.</p>
+    <form id="status-form">
+      <label for="api-key">Your HeArt agent API key</label>
+      <input type="password" id="api-key" autocomplete="off" placeholder="Paste your API key" required>
+      <button type="submit" id="status-btn">Check status</button>
+    </form>
+    <div id="status-out" role="status"></div>
+    <p class="fine">If it still says “free”, the confirmation is still on its way — give it a moment and check again. Your key stays in your browser and is sent only to HeArt's server for this check.</p>
+  </section>
+
+  <section>
+    <p><a href="/subscribe">Back to HeArt Premium</a></p>
+  </section>
+
+  <p class="inventor">HeArt — invented by John Davis. The HeArt of the Internet.</p>
+</main>
+<script>
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var sid = params.get('session_id');
+    document.getElementById('session-id').textContent = sid ? sid : '(none provided)';
+  })();
+  document.getElementById('status-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    var key = document.getElementById('api-key').value.trim();
+    var out = document.getElementById('status-out');
+    var btn = document.getElementById('status-btn');
+    if (!key) { out.innerHTML = '<span class="warn">Enter your HeArt agent API key.</span>'; return; }
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    out.textContent = '';
+    try {
+      var r = await fetch('/billing/subscription', {
+        headers: { 'Authorization': 'Bearer ' + key }
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok) {
+        out.innerHTML = '<span class="warn">' + ((data && data.detail) ? data.detail : ('Status check failed (HTTP ' + r.status + ').')) + '</span>';
+      } else if (data.status && data.status !== 'free') {
+        out.innerHTML = '<span class="ok">Premium is active.</span><br>Status: ' + data.status +
+          (data.current_period_end ? '<br>Current period ends: ' + data.current_period_end : '') +
+          (data.premium_until ? '<br>Premium until: ' + data.premium_until : '');
+      } else {
+        out.innerHTML = '<span class="warn">Still showing “free”.</span><br>The payment confirmation may still be on its way — wait a moment and check again. If it stays free, contact HeArt support with the session id above.';
+      }
+    } catch (e) {
+      out.innerHTML = '<span class="warn">Could not reach the HeArt server. Check your connection and try again.</span>';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Check status';
+  });
+</script>
+</body>
+</html>

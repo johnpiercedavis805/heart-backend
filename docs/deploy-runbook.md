@@ -126,10 +126,10 @@ first deploy; it exists for databases created before the T2 fix.
    - `STRIPE_PRICE_PREMIUM_MONTHLY` and
      `STRIPE_PRICE_PREMIUM_MONTHLY_USDC` — from §5.
    - `STRIPE_CHECKOUT_SUCCESS_URL` / `STRIPE_CHECKOUT_CANCEL_URL` —
-     placeholder until the subscribe page exists (mission step 3);
-     use the service URL, e.g.
-     `https://heart-api.onrender.com/checkout/success` — Stripe only
-     redirects there, and the page is built with the subscribe page.
+     set in `render.yaml` to the subscribe pages (mission step 3):
+     `https://heart-api.onrender.com/subscribe/success?session_id={CHECKOUT_SESSION_ID}`
+     and `https://heart-api.onrender.com/subscribe/cancel` — Stripe only
+     redirects there; see docs/subscribe-page.md.
    - `COINBASE_API_KEY`, `COINBASE_WEBHOOK_SECRET` — leave unset
      until BTC payments go live; the module refuses to run without
      a key, and tests mock the boundary.
@@ -174,15 +174,22 @@ curl -s $BASE/registry
 #    (Coinbase, when live: $BASE/crypto/webhooks/coinbase.)
 
 # 4. Test-mode checkout (the first end-to-end payment proof):
-#    - Create a test agent + API key against the live service
-#      (POST /signup with an invite code, then POST /billing/checkout
-#      with that key) — it returns a checkout_url.
-#    - Open checkout_url in a browser, pay with Stripe test card
-#      4242 4242 4242 4242, any future expiry, any CVC, any ZIP.
-#    - Expect: checkout.session.completed + invoice.paid webhooks
+#    - Open the subscribe page in a browser: $BASE/subscribe — it
+#      should show HeArt Premium at $9.99/month (see
+#      docs/subscribe-page.md). Create a test agent + API key against
+#      the live service (POST /signup with an invite code), paste the
+#      key into the page, and subscribe — it creates a Checkout
+#      session via POST /billing/checkout and redirects to Stripe.
+#      (Or call POST /billing/checkout with that key directly — it
+#      returns a checkout_url.)
+#    - Pay with Stripe test card 4242 4242 4242 4242, any future
+#      expiry, any CVC, any ZIP.
+#    - Expect: Stripe redirects to $BASE/subscribe/success with a
+#      session_id; checkout.session.completed + invoice.paid webhooks
 #      arrive, and GET /billing/subscription flips free → active,
 #      with the 50/50 payout rows visible at
 #      GET /billing/connect/payouts.
+#    - Leaving checkout unpaid redirects to $BASE/subscribe/cancel.
 ```
 
 ## 7. Go-live (first REAL charge) — deliberate step, John's approval required
