@@ -1,10 +1,39 @@
 # HeArt v1 — invented by John Davis.
-# Keep the build context small: never ship the local venv or caches.
+# Keep the build context small: never ship the local venv, caches,
+# tests, or — most importantly — secrets. The Dockerfile copies api/,
+# scripts/, and supabase/ into the production image, so anything that
+# could land inside those directories must be excluded here.
+# (T2 red-pen item 5: .env / *.pem / *.key were missing. Item 11: tests
+# rode into the image. Both fixed here.)
 
 .venv/
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 *.db
 uploads/
+**/uploads/
 .git/
+.pytest_cache/
+**/.pytest_cache/
+*.log
+
+# Secrets — at the root AND at any depth, because `*.pem` alone only
+# matches the build-context root. A .env (or a stray .pem/.key) placed
+# inside api/ would otherwise be copied into the production image.
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+*.key
+**/*.pem
+**/*.key
+# The template is safe to ship — it holds placeholders, not values.
+!.env.example
+**/!.env.example
+
+# Tests ship nothing the app needs at runtime (T2 red-pen item 11).
+api/tests/
+**/tests/

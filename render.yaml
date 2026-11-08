@@ -1,0 +1,87 @@
+# HeArt v1 — Render Blueprint. Invented by John Davis.
+# Apply: connect this repo in the Render Dashboard and select this file,
+# or `render blueprint launch`. See docs/deploy-runbook.md for the order
+# of operations — migrations run BEFORE the first successful boot.
+#
+# Cost: web (starter, ~$7/mo) + Postgres (starter, ~$6/mo) = ~$13/mo,
+# which is the paid-infra figure John approved Nov 8, 2026.
+# The web service uses the repo's Dockerfile (Docker runtime), which
+# installs psycopg[binary] and runs uvicorn on ${PORT} (Render injects it).
+
+services:
+  - type: web
+    name: heart-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    # Render sets PORT automatically; the Dockerfile CMD already uses
+    # ${PORT:-8000}, so no port env var is set here.
+    envVars:
+      # Uploads live on the persistent disk (see `disks` below), not in
+      # the container filesystem — without the disk, uploads vanish on
+      # every redeploy (Dockerfile VOLUME /data + T2 red-pen note).
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      # Safe defaults for the first deploy. The service boots in Stripe
+      # TEST mode until the deliberate go-live step (see runbook §7):
+      # flip to 0 and swap in live keys only with John's approval.
+      - key: STRIPE_TEST_MODE_ONLY
+        value: "1"
+      - key: STRIPE_TAX_ENABLED
+        value: "0"
+      # Auto-wired from the Postgres service below. Render sets this at
+      # service creation — do not set it by hand.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: heart-db
+          property: connectionString
+      # Secrets — set in the Render Dashboard (Environment tab) or via
+      # `render env set`. sync: false keeps them out of this file; the
+      # app FAILS FAST at import if the three required ones are missing.
+      - key: SIGNING_SECRET_ENCRYPTION_KEY
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      # Stripe (test keys first; live keys only at the go-live step).
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_PREMIUM_MONTHLY
+        sync: false
+      - key: STRIPE_PRICE_PREMIUM_MONTHLY_USDC
+        sync: false
+      # Checkout redirect targets — set when the subscribe page exists
+      # (mission step 3). Placeholder until then; see runbook §6.
+      - key: STRIPE_CHECKOUT_SUCCESS_URL
+        sync: false
+      - key: STRIPE_CHECKOUT_CANCEL_URL
+        sync: false
+      # Registry verification signer — recommended for production so the
+      # public key in /registry/:serial/verify survives restarts
+      # (T2 red-pen item 6). 64 hex chars; generate like the signing key.
+      - key: REGISTRY_SIGNING_KEY
+        sync: false
+      # Coinbase (Bitcoin) — only needed once BTC payments go live.
+      - key: COINBASE_API_KEY
+        sync: false
+      - key: COINBASE_WEBHOOK_SECRET
+        sync: false
+    disks:
+      - name: heart-uploads
+        mountPath: /data
+        sizeGB: 1
+
+databases:
+  - name: heart-db
+    plan: starter
+    region: oregon
+    # Postgres 16. The migration runner (scripts/apply_migrations.py)
+    # connects with this database's connection string (auto-wired above
+    # as DATABASE_URL) and needs table-owner privileges — Render's
+    # default user has them. No Supabase project is required for this
+    # path; see runbook §1 if Supabase is preferred instead.

@@ -58,13 +58,14 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
    (or the platform's proxy IPs) to the uvicorn `CMD`. The per-key limiter
    is unaffected (it keys on the API-key hash, not IP).
 
-5. **FIX — `.dockerignore` doesn't exclude secrets files.**
-   It excludes `.venv/`, `__pycache__/`, `*.db`, `uploads/`, `.git/` — but
-   not `.env`, `.env.*`, `*.pem`, or `*.key`. The Dockerfile copies `api/`,
-   `scripts/`, and `supabase/`; a `.env` (or a stray `.pem`/`.key`) placed
-   inside `api/` would be copied into the production image. Add
-   `.env`, `.env.*`, `*.pem`, `*.key` to `.dockerignore`. (`.gitignore`
-   already covers them for git — this is the image-side gap.)
+5. **FIXED (Nov 8, 2026) — `.dockerignore` excludes secrets files.**
+   It now excludes `.env`, `.env.*`, `*.pem`, `*.key` at the root and
+   at any depth (`**/` patterns — a bare `*.pem` only matches the
+   build-context root), plus `api/tests/`, `**/tests/`, `*.log`, and
+   `.pytest_cache/`. `!.env.example` keeps the template shippable
+   (placeholders only, no real values). Verified by inspection of the
+   file; the Dockerfile copies `api/`, `scripts/`, and `supabase/`,
+   and none of those paths can now carry a secret file into the image.
 
 ## FIX — before scaling, not before first deploy
 
@@ -96,19 +97,18 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
    `redoc_url=None`) or leave them on deliberately — but make it a
    decision, not an accident.
 
-10. **FIX — No deploy config in the repo.**
-    There is no `render.yaml`, `fly.toml`, or `Procfile`, and no
-    `.env.example` (the `.gitignore` even anticipates one with
-    `!.env.example`, but the file doesn't exist). The deploy — port,
-    health-check path, env vars, persistent disk — lives in a dashboard,
-    not in version control, so a rebuild from scratch is guesswork. Add a
-    `render.yaml` (or `fly.toml`) and a `.env.example` listing every
-    required variable.
+10. **FIXED (Nov 8, 2026) — Deploy config exists in the repo.**
+    `render.yaml` (Render Blueprint: Docker web service `heart-api`
+    + Postgres `heart-db`, health check on `/health`, 1 GB persistent
+    disk at `/data`, all env vars declared with secrets as
+    `sync: false`) and `.env.example` (every variable in
+    `api/app/config.py`, with required/generated/copied marked) now
+    live in version control, with the order of operations in
+    `docs/deploy-runbook.md`. The deploy no longer lives only in a
+    dashboard.
 
-11. **CUT — Tests ship in the production image.**
-    `api/tests/` isn't excluded by `.dockerignore`, so the test scripts
-    ride into the image. Harmless, but bloat. Add `api/tests/` (or
-    `**/tests/`) to `.dockerignore`.
+11. **FIXED (Nov 8, 2026) — Tests no longer ship in the image.**
+    `.dockerignore` now excludes `api/tests/` and `**/tests/`.
 
 ## KEEP
 
@@ -166,6 +166,7 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
 ## Bottom line
 
 Nothing in the deployment setup is broken in a way that stops a first
-deploy — but items 1–5 are the ones that bite in production. Items 1 and 2
-are FIXED (Nov 8, 2026 — encrypted signing secrets, DATABASE_URL fail-fast);
-items 3–5 are launch config, not code rewrites. The rest is hygiene.
+deploy — but items 1–5 are the ones that bite in production. Items 1, 2,
+5, 10, and 11 are FIXED (Nov 8, 2026 — encrypted signing secrets,
+DATABASE_URL fail-fast, .dockerignore secrets + tests, deploy config);
+items 3 and 4 are launch config, not code rewrites. The rest is hygiene.
