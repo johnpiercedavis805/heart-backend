@@ -198,3 +198,95 @@ class KeyRollover(Base):
     creator_cosignature: Mapped[str | None] = mapped_column(String(128), nullable=True)  # hex; required on the "agent" path (NoNonsense fix, Oct 14), NULL on the "creator" path and pre-fix rows
     rolled_at: Mapped[str] = mapped_column(String(64), nullable=False)  # ISO-8601, exactly as signed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ----------------- Stripe billing (HeArt Premium; plan Nov 7, 2026) --------
+# Local mirrors of Stripe objects. Stripe is the source of truth; these
+# rows exist so the app can answer "is this agent premium?" and reconcile
+# invoices without a Stripe round-trip on every request. Webhooks keep them
+# in sync (see billing.handle_webhook_event). Money is in integer cents.
+
+
+class BillingCustomer(Base):
+    """One HeArt agent -> one Stripe Customer. Created lazily at first
+    checkout / payment-sheet call, never at signup (freemium: payment info
+    is collected at upgrade, not signup)."""
+
+    __tablename__ = "billing_customers"
+
+    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    stripe_customer_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class Subscription(Base):
+    """Local mirror of a Stripe Subscription (flat-rate HeArt Premium).
+    status follows Stripe: incomplete, incomplete_expired, trialing, active,
+    past_due, canceled, unpaid, paused."""
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    stripe_subscription_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    stripe_price_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class InvoiceRecord(Base):
+    """Local mirror of a Stripe Invoice, reconciled from webhooks
+    (invoice.paid, invoice.payment_failed, charge.refunded,
+    credit_note.created). Amounts are integer cents."""
+
+    __tablename__ = "invoice_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    stripe_invoice_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    amount_due_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    amount_paid_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    amount_refunded_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    credit_total_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="usd")
+    status: Mapped[str] = mapped_column(String(30), nullable=False)  # draft, open, paid, void, uncollectible, refunded
+    hosted_invoice_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class WebhookEvent(Base):
+    """Every verified Stripe webhook event, recorded once by Stripe event
+    id. This is the idempotency record: a re-delivered event (Stripe
+    retries) is skipped, never processed twice."""
+
+    __tablename__ = "webhook_events"
+
+    stripe_event_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class ConnectAccount(Base):
+    """One HeArt agent (a creator) -> one Stripe Connect account (v2
+    recipient configuration, stripe_transfers capability). Scaffolding
+    only: account creation + onboarding link + status. Creator PAYOUTS
+    (transfers) are NOT built — the payout trigger is still an open
+    question for John (see billing.create_creator_transfer, which refuses).
+    No transfer is ever created from this table."""
+
+    __tablename__ = "connect_accounts"
+
+    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    stripe_account_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    account_type: Mapped[str] = mapped_column(String(20), nullable=False, default="recipient")
+    transfers_status: Mapped[str | None] = mapped_column(String(30), nullable=True)  # stripe_transfers capability status
+    onboarding_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

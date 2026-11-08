@@ -8,3 +8,4 @@ python-multipart==0.0.32
 uvicorn==0.54.0
 httpx==0.28.1  # test client only
 pynacl==1.6.2  # Ed25519 for decentralized identity + work attestation (John's provenance-by-design)
+stripe==16.1.0  # HeArt Premium billing: Checkout, Payment Sheet, Billing, Invoicing, Connect v2 (Nov 8 2026)

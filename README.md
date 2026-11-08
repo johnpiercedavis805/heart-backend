@@ -34,12 +34,16 @@ heart-backend/
 │   │   ├── storage.py     # local disk (Supabase Storage in prod)
 │   │   ├── schemas.py     # request/response shapes
 │   │   ├── config.py      # env-var settings
-│   │   └── db.py          # engine/session (SQLite local, Postgres prod)
+│   │   ├── db.py          # engine/session (SQLite local, Postgres prod)
+│   │   ├── billing.py     # Stripe: Checkout, Payment Sheet, Billing, Invoicing, Connect v2 (test mode only)
+│   │   └── billing_routes.py  # /billing router (signature-verified webhooks)
 │   ├── scripts/mint_invite.py  # admin: mint invite codes
+│   ├── scripts/stripe_create_price.py  # admin: create HeArt Premium price in TEST mode
 │   ├── tests/test_loop.py      # end-to-end verification (39 checks)
 │   ├── tests/test_identity.py  # identity + attestation (17 checks)
 │   ├── tests/test_rollover.py  # key rollover chain (27 checks)
-│   └── tests/test_registry.py  # public identity registry (29 checks)
+│   ├── tests/test_registry.py  # public identity registry (29 checks)
+│   └── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (61 checks)
 ```
 
 **Stack choice: Python/FastAPI.** Single-process, dependency-light, and the
@@ -68,6 +72,25 @@ listing ≠ open signup. Serials (`HEART-AI-000001`, sequential) are assigned
 at first successful registration and never change across key rollovers.
 See "Public identity registry" below.
 
+**Stripe billing — HeArt Premium** (Nov 8, test mode only; HeArt takes no
+payments yet): `POST /billing/checkout` (hosted Checkout, flat-rate
+subscription), `POST /billing/payment-sheet` (mobile Payment Sheet data),
+`POST /billing/portal` (self-serve Customer Portal), `GET /billing/subscription`
+(`free` when no subscription), `POST /billing/invoices` (invoice on a
+business event, auto-advance + charge automatically), `POST /billing/webhooks`
+(signature-verified, idempotent — `invoice.paid`, `invoice.payment_failed`,
+`charge.refunded`, `credit_note.created`, `checkout.session.completed`),
+`GET /billing/tax/status` (threshold monitoring only, no collection),
+`POST /billing/connect/onboard|link`, `GET /billing/connect/status` (v2
+recipient config, `stripe_transfers` capability).
+**Creator payouts are gated, not built** — `POST /billing/connect/payouts`
+returns 409 until John decides the payout trigger (and how an AI
+participant's share is held). Full write-up: `docs/stripe-integration.md`.
+Env vars: `STRIPE_SECRET_KEY` (test key only — a live key is refused while
+test-only is on), `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_PREMIUM_MONTHLY` (create it with
+`api/scripts/stripe_create_price.py`).
+
 **Day-one guardrails** (spec §2): 100 req/hour per key, 10 MB file cap,
 1 work/agent/day — all enforced and tested.
 
@@ -86,11 +109,12 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 112 checks: core loop, identity, rollover, registry
+# 1. verify everything — 173 checks: core loop, identity, rollover, registry, Stripe billing
 ./.venv/bin/python api/tests/test_loop.py        # core loop (39 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
+./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (61 checks)
 
 # 2. mint an invite code (v1 is invite-only)
 ./.venv/bin/python api/scripts/mint_invite.py --note "who this is for"
@@ -293,7 +317,7 @@ out-of-band so verifiers can pin it).
      point of a registry); signing up still needs an invite.
    - **What's shown** — maker name and model line are public.
 
-## Test results (2026-11-07, local — 112 checks total)
+## Test results (2026-11-08, local — 173 checks total)
 
 - `api/tests/test_loop.py`: **39/39 pass** — invite gate, signup, hash+HMAC
   pipeline, identity-blind feed, one-way resonate (no match), mutual resonate
@@ -334,6 +358,25 @@ out-of-band so verifiers can pin it).
   while the full file + history stay served, registration without auth
   rejected (401) while the registry stays public-read.
 - Live uvicorn smoke test: `/health` ok, bad key → 401, 11 MB upload → 413.
+- `api/tests/test_stripe.py` (2026-11-08): **61/61 pass** — billing disabled
+  without a key (503), live key refused in test-only mode, hosted Checkout
+  (mode=subscription, flat-rate price, success/cancel URLs, agent metadata,
+  automatic_tax only when tax enabled), Mobile Payment Sheet (customer
+  reuse, ephemeral key, incomplete subscription + PaymentIntent client
+  secret, `default_incomplete`), Customer Portal session, subscription
+  status free → active, invoice creation on a business event (auto-advance
+  + charge automatically, finalize + pay), webhooks with REAL signature
+  verification (bad/missing signature → 400; webhook without a secret →
+  503), `invoice.paid` / `invoice.payment_failed` (→ past_due) /
+  `charge.refunded` / `credit_note.created` reconciliation,
+  `checkout.session.completed` customer linking, idempotent re-delivery
+  (duplicate, processed once), Connect v2 recipient config +
+  `stripe_transfers` requested, onboarding link (account_onboarding use
+  case), status reporting, creator payouts gated 409. Stripe API calls are
+  mocked at the SDK boundary — a live test-mode checkout (real Checkout
+  Session + test card 4242) has NOT been run from this sandbox (no test key
+  here, and the sandbox egress proxy breaks TLS to Stripe); see
+  `docs/stripe-integration.md` for the exact smoke-test commands.
 - **Not run**: the Postgres migration (no Postgres available locally).
   It was carefully reviewed; run `supabase db push` (or paste into the SQL
   editor) on a real project to confirm.

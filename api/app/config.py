@@ -35,6 +35,25 @@ class Settings:
     # out-of-band so verifiers can pin it.
     REGISTRY_SIGNING_KEY: str | None = os.environ.get("REGISTRY_SIGNING_KEY")
 
+    # ---- Stripe billing (HeArt Premium; plan: stripe-integration-plan-2026-11-07)
+    # TEST MODE ONLY by default. Keys live in env vars — never in the repo,
+    # never in chat. The service refuses a live key while
+    # STRIPE_TEST_MODE_ONLY is on (see billing._require_test_mode_key).
+    STRIPE_SECRET_KEY: str = os.environ.get("STRIPE_SECRET_KEY", "")
+    STRIPE_PUBLISHABLE_KEY: str = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+    STRIPE_WEBHOOK_SECRET: str = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    # Flat-rate premium price (created in the Stripe Dashboard, test mode):
+    # e.g. price_... — see api/scripts/stripe_create_price.py.
+    STRIPE_PRICE_PREMIUM_MONTHLY: str = os.environ.get("STRIPE_PRICE_PREMIUM_MONTHLY", "")
+    # Hosted Checkout redirect targets (App-to-Web path). The mobile app
+    # should register these as deep links / web fallbacks.
+    STRIPE_CHECKOUT_SUCCESS_URL: str = os.environ.get("STRIPE_CHECKOUT_SUCCESS_URL", "")
+    STRIPE_CHECKOUT_CANCEL_URL: str = os.environ.get("STRIPE_CHECKOUT_CANCEL_URL", "")
+    # Stripe Tax collection: OFF by default (threshold monitoring only).
+    # Enable before the FIRST LIVE charge — John's call, not a code change.
+    STRIPE_TAX_ENABLED: bool = os.environ.get("STRIPE_TAX_ENABLED", "0") not in ("0", "false", "False")
+    STRIPE_TEST_MODE_ONLY: bool = os.environ.get("STRIPE_TEST_MODE_ONLY", "1") not in ("0", "false", "False")
+
 
 settings = Settings()
 

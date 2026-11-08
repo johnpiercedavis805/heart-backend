@@ -246,3 +246,89 @@ class RegistryVerifyOut(BaseModel):
     server_signature: str
     signature_valid: bool  # creator signature, recomputed live
     verified_at: str  # ISO-8601 UTC, exactly as signed
+
+
+# ------------------------------------------------ Stripe billing (HeArt Premium, Nov 8) ---
+class CheckoutOut(BaseModel):
+    checkout_url: str
+    session_id: str
+
+
+class PaymentSheetOut(BaseModel):
+    publishable_key: str
+    customer_id: str
+    ephemeral_key_secret: str
+    payment_intent_client_secret: str
+    subscription_id: str
+
+
+class PortalIn(BaseModel):
+    return_url: str | None = None
+
+
+class PortalOut(BaseModel):
+    portal_url: str
+
+
+class SubscriptionOut(BaseModel):
+    status: str  # "free" (no subscription) or Stripe status: active, past_due, ...
+    stripe_subscription_id: str | None
+    stripe_price_id: str | None
+    current_period_end: str | None
+    cancel_at_period_end: bool
+
+
+class InvoiceCreateIn(BaseModel):
+    amount_cents: int = Field(gt=0)
+    currency: str = "usd"
+    description: str = Field(min_length=1, max_length=500)
+    subscription_id: str | None = None
+
+
+class InvoiceOut(BaseModel):
+    invoice_id: str
+    status: str | None
+    amount_due_cents: int
+    amount_paid_cents: int
+    currency: str
+    hosted_invoice_url: str | None
+
+
+class WebhookOut(BaseModel):
+    received: bool
+    result: str  # processed | duplicate | ignored | ignored-no-agent | ignored-no-invoice
+
+
+class TaxStatusOut(BaseModel):
+    collection_enabled: bool
+    monitoring: str
+    note: str
+
+
+class ConnectOnboardIn(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+    display_name: str = Field(min_length=1, max_length=200)
+    refresh_url: str = Field(min_length=1, max_length=500)
+    return_url: str = Field(min_length=1, max_length=500)
+
+
+class ConnectOnboardOut(BaseModel):
+    account_id: str
+    type: str
+    already_exists: bool
+
+
+class ConnectLinkIn(BaseModel):
+    refresh_url: str = Field(min_length=1, max_length=500)
+    return_url: str = Field(min_length=1, max_length=500)
+
+
+class ConnectLinkOut(BaseModel):
+    onboarding_url: str
+
+
+class ConnectStatusOut(BaseModel):
+    connected: bool
+    account_id: str | None
+    transfers_status: str | None
+    onboarding_complete: bool

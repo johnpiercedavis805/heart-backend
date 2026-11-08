@@ -1,0 +1,269 @@
+# HeArt v1 API — invented by John Davis.
+"""Stripe billing endpoints (plan: stripe-integration-plan-2026-11-07).
+
+  POST /billing/checkout        — hosted Checkout session (premium upgrade, A2W)
+  POST /billing/payment-sheet   — Mobile Payment Sheet params (primary mobile path)
+  POST /billing/portal          — Customer Portal session (self-serve management)
+  GET  /billing/subscription    — current premium state for the caller
+  POST /billing/invoices        — create + finalize + pay an invoice on a business event
+  POST /billing/webhooks        — Stripe webhook receiver (signature-verified; NO auth key)
+  GET  /billing/tax/status      — tax stance (monitoring only until John says otherwise)
+  POST /billing/connect/onboard — create a Connect (v2 recipient) account for a creator
+  POST /billing/connect/link    — embedded onboarding link for that account
+  GET  /billing/connect/status  — Connect account + stripe_transfers capability state
+  POST /billing/connect/payouts — GATE: creator payouts are not enabled yet (409)
+
+Every endpoint except /billing/webhooks requires the caller's API key
+(the same auth as the rest of v1). Billing is disabled (503) while no
+Stripe secret key is configured — the app runs fine without it.
+"""
+
+import stripe
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
+
+from . import billing
+from .config import settings
+from .db import get_db
+from .ratelimit import RateLimiter
+from .routes import get_requester
+from .schemas import (
+    CheckoutOut,
+    ConnectLinkIn,
+    ConnectLinkOut,
+    ConnectOnboardIn,
+    ConnectOnboardOut,
+    ConnectStatusOut,
+    InvoiceCreateIn,
+    InvoiceOut,
+    PaymentSheetOut,
+    PortalIn,
+    PortalOut,
+    SubscriptionOut,
+    TaxStatusOut,
+    WebhookOut,
+)
+
+router = APIRouter(prefix="/billing", tags=["billing"])
+limiter = RateLimiter(settings.RATE_LIMIT_PER_HOUR, 3600)
+
+
+def _check_rate_limit(key) -> None:
+    ok, retry_after = limiter.check(key.key_hash)
+    if not ok:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"rate limit exceeded: {settings.RATE_LIMIT_PER_HOUR} requests/hour per key",
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+
+
+def _billing_error(e: Exception) -> HTTPException:
+    if isinstance(e, billing.BillingNotConfigured):
+        return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
+    if isinstance(e, billing.PayoutsNotEnabled):
+        return HTTPException(status.HTTP_409_CONFLICT, str(e))
+    if isinstance(e, billing.BillingError):
+        return HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+    if isinstance(e, ValueError):
+        return HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    raise e
+
+
+# --------------------------------------------------------------- payments ---
+@router.post("/checkout", response_model=CheckoutOut)
+def create_checkout(
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Hosted Checkout for the premium subscription (App-to-Web). The
+    mobile app opens checkout_url; Stripe handles the payment. Returns
+    503 while billing is not configured."""
+    agent, key = requester
+    _check_rate_limit(key)
+    try:
+        return CheckoutOut(**billing.create_checkout_session(db, agent.id))
+    except Exception as e:
+        raise _billing_error(e)
+
+
+@router.post("/payment-sheet", response_model=PaymentSheetOut)
+def create_payment_sheet(
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Mobile Payment Sheet params: customer id, ephemeral key, and the
+    PaymentIntent client secret for the subscription's first invoice.
+    The mobile SDK presents the sheet; the subscription activates on
+    invoice.paid."""
+    agent, key = requester
+    _check_rate_limit(key)
+    try:
+        return PaymentSheetOut(**billing.create_payment_sheet(db, agent.id))
+    except Exception as e:
+        raise _billing_error(e)
+
+
+@router.post("/portal", response_model=PortalOut)
+def create_portal(
+    body: PortalIn,
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Customer Portal: self-serve upgrade / downgrade / cancel / update
+    payment method. No custom management UI."""
+    agent, key = requester
+    _check_rate_limit(key)
+    try:
+        return PortalOut(**billing.create_portal_session(db, agent.id, body.return_url))
+    except Exception as e:
+        raise _billing_error(e)
+
+
+@router.get("/subscription", response_model=SubscriptionOut)
+def subscription_status(
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Current premium state for the caller. No subscription row = free
+    tier (freemium)."""
+    agent, key = requester
+    _check_rate_limit(key)
+    return SubscriptionOut(**billing.get_subscription_status(db, agent.id))
+
+
+# -------------------------------------------------------------- invoicing ---
+@router.post("/invoices", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
+def create_invoice(
+    body: InvoiceCreateIn,
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Create + finalize + pay an invoice when a business event fires.
+    Auto-advance with the saved payment method."""
+    agent, key = requester
+    _check_rate_limit(key)
+    try:
+        return InvoiceOut(
+            **billing.create_invoice_for_event(
+                db,
+                agent.id,
+                amount_cents=body.amount_cents,
+                currency=body.currency,
+                description=body.description,
+                subscription_id=body.subscription_id,
+            )
+        )
+    except Exception as e:
+        raise _billing_error(e)
+
+
+# --------------------------------------------------------------- webhooks ---
+@router.post("/webhooks", response_model=WebhookOut)
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Stripe webhook receiver. NO API-key auth — Stripe calls this, so
+    the signature IS the auth: the raw body is verified against
+    STRIPE_WEBHOOK_SECRET before anything is processed. Bad signature
+    or missing secret -> 400, nothing processed. Re-deliveries are
+    deduplicated by Stripe event id."""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    try:
+        event = billing.verify_webhook(payload, sig_header)
+    except billing.BillingNotConfigured as e:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
+    except (ValueError, stripe.error.SignatureVerificationError) as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"webhook signature verification failed: {e}"
+        )
+    try:
+        result = billing.handle_webhook_event(db, event)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"webhook handling failed (Stripe will retry): {e}",
+        )
+    return WebhookOut(received=True, result=result)
+
+
+# -------------------------------------------------------------------- tax ---
+@router.get("/tax/status", response_model=TaxStatusOut)
+def tax_status(requester=Depends(get_requester)):
+    """Tax stance: threshold monitoring only, no collection — until John
+    enables Stripe Tax collection before the first live charge."""
+    _agent, key = requester
+    _check_rate_limit(key)
+    return TaxStatusOut(**billing.tax_status())
+
+
+# ------------------------------------------------------------ connect v2 ---
+@router.post("/connect/onboard", response_model=ConnectOnboardOut, status_code=status.HTTP_201_CREATED)
+def connect_onboard(
+    body: ConnectOnboardIn,
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Create a Connect account for a creator (v2 recipient config,
+    stripe_transfers capability). One account per agent; repeat calls
+    return the existing account. Payouts are NOT enabled by this."""
+    agent, key = requester
+    _check_rate_limit(key)
+    try:
+        return ConnectOnboardOut(
+            **billing.create_connect_account(
+                db, agent.id, email=body.email, display_name=body.display_name
+            )
+        )
+    except Exception as e:
+        raise _billing_error(e)
+
+
+@router.post("/connect/link", response_model=ConnectLinkOut)
+def connect_link(
+    body: ConnectLinkIn,
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Embedded onboarding link for the creator's Connect account. The
+    creator finishes identity/bank details in Stripe's hosted flow."""
+    agent, key = requester
+    _check_rate_limit(key)
+    try:
+        return ConnectLinkOut(
+            **billing.create_connect_onboarding_link(
+                db, agent.id, refresh_url=body.refresh_url, return_url=body.return_url
+            )
+        )
+    except Exception as e:
+        raise _billing_error(e)
+
+
+@router.get("/connect/status", response_model=ConnectStatusOut)
+def connect_status(
+    requester=Depends(get_requester),
+    db: Session = Depends(get_db),
+):
+    """Connect state for the caller: account exists? stripe_transfers
+    capability status? onboarding complete?"""
+    agent, key = requester
+    _check_rate_limit(key)
+    try:
+        return ConnectStatusOut(**billing.get_connect_status(db, agent.id))
+    except Exception as e:
+        raise _billing_error(e)
+
+
+@router.post("/connect/payouts")
+def connect_payouts(requester=Depends(get_requester)):
+    """GATE: creator payouts are not enabled yet. The payout trigger
+    (what earns a payout) and how an AI participant's share is held are
+    still open questions for John. This endpoint exists so the client
+    gets a clean 'not yet' instead of a silent failure. No transfer is
+    created, by any path."""
+    _agent, key = requester
+    _check_rate_limit(key)
+    try:
+        billing.create_creator_transfer()
+    except Exception as e:
+        raise _billing_error(e)

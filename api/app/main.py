@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import routes
+from . import billing_routes, routes
 from .config import settings
 from .db import init_db
 from .storage import LocalStorage
@@ -30,3 +30,4 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(routes.router)
+app.include_router(billing_routes.router)
