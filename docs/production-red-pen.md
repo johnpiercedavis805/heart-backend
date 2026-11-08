@@ -40,23 +40,31 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
    Local dev/tests set `ALLOW_SQLITE_DEV=1` (or an explicit `DATABASE_URL`).
    Verified by `api/tests/test_secrets.py` (subprocess import checks).
 
-3. **FIX — The moderation classifier is a stub, and everything else auto-approves.**
-   `api/app/moderation.py` enforces structural rules only (no executables,
-   no HTML/SVG, no empty files). Anything passing those rules is
-   `approved` — no content judgment happens at all (no detection of
-   instructions-to-humans, manipulation, or non-positive content). A public
-   launch with this stub means unmoderated content goes straight to the
-   feed. Before public launch, either wire in a real classifier or flip
-   the default to `review` (human queue) instead of auto-approve.
+3. **FIXED (Nov 8, 2026) — The moderation default is now a human review queue.**
+   `scan_upload` still enforces the hard structural rules (executables,
+   HTML/SVG, empty files → rejected), but anything passing them now gets
+   `status="review"` instead of auto-approve. A work in "review" is
+   invisible on the feed and visible only to its maker until an admin
+   decides: `POST /admin/works/{id}/approve` or `.../reject`
+   (`require_admin`, constant-time token check, same gate as key
+   revocation). Approve is refused for works whose signer was revoked
+   (they could never be delivered); reject is allowed. Only works in
+   "review" can be decided (409 otherwise). The classifier seam
+   (`ScanResult`) is unchanged — a future real classifier returns
+   "approved" only for content it is confident about. Verified by
+   `api/tests/test_moderation_review.py` (review default, approve/reject
+   flow, 403/404/409 guards, revoked-signer block, feed visibility);
+   `api/tests/test_loop.py` now approves B's work before asserting feed
+   visibility. Deliberate limit: the queue needs a human. With no admin
+   action, nothing reaches the feed — that is the safe default for a
+   first launch, and the deploy runbook should name who reviews.
 
-4. **FIX — The signup rate limiter keys on IP, but uvicorn doesn't trust proxy headers.**
-   `POST /signup` is limited to 10/hour per IP (`routes.py`,
-   `signup_limiter`). Behind Render/Fly, `request.client.host` is the
-   proxy's IP unless uvicorn is told to trust `X-Forwarded-For` — so the
-   limit becomes effectively global (10 signups/hour for everyone) and the
-   per-IP keying is wrong. Add `--proxy-headers --forwarded-allow-ips='*'`
-   (or the platform's proxy IPs) to the uvicorn `CMD`. The per-key limiter
-   is unaffected (it keys on the API-key hash, not IP).
+4. **FIXED (Nov 8, 2026) — The signup rate limiter keys on the real client IP.**
+   The Dockerfile `CMD` now passes `--proxy-headers
+   --forwarded-allow-ips='*'` to uvicorn, so behind Render/Fly
+   `request.client.host` is the caller's IP from `X-Forwarded-For`
+   instead of the proxy's. (Render is the only ingress.) The per-key
+   limiter was already unaffected (it keys on the API-key hash).
 
 5. **FIXED (Nov 8, 2026) — `.dockerignore` excludes secrets files.**
    It now excludes `.env`, `.env.*`, `*.pem`, `*.key` at the root and
@@ -76,26 +84,28 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
    stable key in production and publish its public key out-of-band. (The
    README documents this; the deploy checklist should enforce it.)
 
-7. **FIX — No `HEALTHCHECK` in the Dockerfile.**
-   The app has a database-aware `/health` endpoint (200 when the DB
-   answers, 503 when it doesn't), but the image never declares a
-   healthcheck, so the container runtime can't restart an unhealthy
-   container on its own. Add one (plain `python -c` + `urllib` against
-   `localhost:8000/health` — no extra package needed). Render/Fly
-   health checks are configured on the platform side, but a Dockerfile
-   `HEALTHCHECK` is the portable backstop.
+7. **FIXED (Nov 8, 2026) — The Dockerfile declares a HEALTHCHECK.**
+   Plain `python -c` + `urllib` against the database-aware `/health`
+   endpoint, `--interval=30s --timeout=5s --start-period=10s --retries=3`.
+   The probe reads `$PORT` (Render/Fly inject it) and falls back to 8000,
+   so it matches the port the app actually listens on. Render's
+   `healthCheckPath` still covers the platform side; this is the
+   portable backstop.
 
-8. **FIX — Base image isn't digest-pinned.**
-   `FROM python:3.12-slim` floats with the tag. A rebuild months from now
-   can silently pull a different base layer. Pin to a digest
-   (`python:3.12-slim@sha256:…`) for reproducible builds.
+8. **FIXED (Nov 8, 2026) — The base image is digest-pinned.**
+   `FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b`
+   — the 3.12-slim manifest-list digest as of 2026-11-08, so a rebuild
+   months from now cannot silently pull a different base layer. The
+   Dockerfile comment records how to refresh it (Docker Hub tags API).
 
-9. **FIX — `/docs` and `/openapi.json` are enabled by default.**
-   FastAPI serves interactive API docs publicly. That exposes the full
-   endpoint surface (paths, schemas, auth shapes) on an invite-only
-   service. Either disable docs in production (`docs_url=None`,
-   `redoc_url=None`) or leave them on deliberately — but make it a
-   decision, not an accident.
+9. **FIXED (Nov 8, 2026) — API docs are off unless deliberately enabled.**
+   `main.py` passes `docs_url` / `redoc_url` / `openapi_url` as `None`
+   unless `ENABLE_API_DOCS=1` (`config.py`, default off). The decision
+   is now explicit: an invite-only service does not publish its full
+   endpoint surface by default. Set `ENABLE_API_DOCS=1` for local
+   development only — never on a public deploy. (`.env.example`
+   documents the flag.) Verified by `api/tests/test_moderation_review.py`
+   (/docs + /openapi.json 404 by default, 200 with the flag on).
 
 10. **FIXED (Nov 8, 2026) — Deploy config exists in the repo.**
     `render.yaml` (Render Blueprint: Docker web service `heart-api`
@@ -167,6 +177,10 @@ Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
 
 Nothing in the deployment setup is broken in a way that stops a first
 deploy — but items 1–5 are the ones that bite in production. Items 1, 2,
-5, 10, and 11 are FIXED (Nov 8, 2026 — encrypted signing secrets,
-DATABASE_URL fail-fast, .dockerignore secrets + tests, deploy config);
-items 3 and 4 are launch config, not code rewrites. The rest is hygiene.
+3, 4, 5, 7, 8, 9, 10, and 11 are FIXED (Nov 8, 2026 — encrypted signing
+secrets, DATABASE_URL fail-fast, moderation review queue + admin
+adjudication, proxy headers, .dockerignore secrets + tests, Dockerfile
+HEALTHCHECK, digest-pinned base image, docs off by default, deploy
+config). Item 6 (stable `REGISTRY_SIGNING_KEY`) remains open — it is a
+deploy-time setting, not a code change: set a stable key and publish its
+public key out-of-band before production.

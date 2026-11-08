@@ -78,6 +78,13 @@ class Settings:
     # out-of-band so verifiers can pin it.
     REGISTRY_SIGNING_KEY: str | None = os.environ.get("REGISTRY_SIGNING_KEY")
 
+    # ---- API docs (T2 red-pen item 9) -------------------------------------
+    # FastAPI's interactive docs (/docs, /redoc, /openapi.json) expose the
+    # full endpoint surface. This is an invite-only service, so they are
+    # OFF unless explicitly enabled — a deliberate decision, not an
+    # accident. Set ENABLE_API_DOCS=1 for local development only.
+    ENABLE_API_DOCS: bool = _bool("ENABLE_API_DOCS", False)
+
     # ---- Stripe billing (HeArt Premium; plan: stripe-integration-plan-2026-11-07)
     # TEST MODE ONLY by default. Keys live in env vars — never in the repo,
     # never in chat. The service refuses a live key while

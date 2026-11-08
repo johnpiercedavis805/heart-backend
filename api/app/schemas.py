@@ -108,6 +108,13 @@ class RevokeOut(BaseModel):
     works_flagged_for_review: int
 
 
+class ReviewOut(BaseModel):
+    """Outcome of an admin review-queue decision on one work."""
+
+    work_id: str
+    moderation_status: str  # "approved" | "rejected"
+
+
 # --------------------------------- decentralized identity (John's design) ---
 class IdentityRegisterIn(BaseModel):
     """Everything the server needs to store + verify an identity file.

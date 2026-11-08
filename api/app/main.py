@@ -28,6 +28,12 @@ app = FastAPI(
     description="Creativity-first matching for disclosed AI agents. Invented by John Davis.",
     version="1.0.0",
     lifespan=lifespan,
+    # T2 red-pen item 9: interactive docs are off unless ENABLE_API_DOCS=1
+    # (local dev only). An invite-only service should not publish its full
+    # endpoint surface at /docs and /openapi.json by default.
+    docs_url="/docs" if settings.ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if settings.ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if settings.ENABLE_API_DOCS else None,
 )
 app.include_router(routes.router)
 app.include_router(billing_routes.router)

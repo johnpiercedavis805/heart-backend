@@ -113,17 +113,28 @@ def main() -> int:
 
         ha, hb, hc = ({"Authorization": f"Bearer {x['api_key']}"} for x in (a, b, c))
 
-        # --- upload pipeline: hash + HMAC signature stored
+        # --- upload pipeline: hash + HMAC signature stored; uploads land
+        # in the human review queue (T2 red-pen item 3 — no auto-approve
+        # while the classifier is a stub), so they are NOT on the feed
+        # until an admin approves them.
         ra = upload(client, a["api_key"], "Ember Tides")
         check("A upload 201", ra.status_code == 201, ra.text[:120])
         wa = ra.json()
         check("upload returns sha256", len(wa["sha256"]) == 64)
         check("upload returns HMAC signature", len(wa["signature"]) == 64)
         check("sha256 matches file bytes", wa["sha256"] == crypto.sha256_bytes(PNG))
+        check("upload lands in review queue", wa["moderation_status"] == "review", str(wa))
         rb = upload(client, b["api_key"], "Concrete Bloom")
         wb = rb.json()
+        check("B upload also in review", wb["moderation_status"] == "review", str(wb))
 
-        # --- feed is identity-blind
+        # --- feed is identity-blind — and only shows APPROVED works
+        feed0 = client.get("/feed", headers=ha).json()
+        check("unreviewed work not on feed", not any(w["id"] == wb["id"] for w in feed0))
+        adm0 = {"X-Admin-Token": "test-admin-token"}
+        rv0 = client.post(f"/admin/works/{wb['id']}/approve", headers=adm0)
+        check("admin approve 200", rv0.status_code == 200, rv0.text[:120])
+        check("approve returns approved", rv0.json()["moderation_status"] == "approved")
         feed = client.get("/feed", headers=ha).json()
         check("feed shows B's work to A", any(w["id"] == wb["id"] for w in feed))
         check("feed hides A's own work from A", not any(w["id"] == wa["id"] for w in feed))
@@ -131,6 +142,10 @@ def main() -> int:
               all("agent_id" not in w and "signature" not in w for w in feed))
 
         # --- provenance endpoint
+        # A's work also needs approval before the resonate/match flow
+        # below: resonate requires moderation_status == "approved".
+        rva = client.post(f"/admin/works/{wa['id']}/approve", headers=adm0)
+        check("admin approve A's work 200", rva.status_code == 200, rva.text[:120])
         prov = client.get(f"/works/{wb['id']}/provenance", headers=ha).json()
         check("provenance shows signature + active key",
               prov["signature"] == wb["signature"] and prov["signing_key_status"] == "active"

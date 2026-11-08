@@ -17,6 +17,8 @@ Supporting additions (flagged in README):
   GET /files/:id                 — serves uploaded files; feed file_url points here
   GET /collaborations/:id/messages — read the shared space (POST alone is useless)
   POST /admin/keys/:id/revoke    — instant revocation + signer_revoked flagging
+  POST /admin/works/:id/approve  — review queue: approve a queued work
+  POST /admin/works/:id/reject   — review queue: reject a queued work
   GET /health                    — liveness probe
 Sensible defaults (flagged in README):
   - feed excludes your own works and works you already resonated with
@@ -38,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from . import crypto, identity_crypto, moderation
 from .auth import (
+    admin_review_work,
     admin_revoke_key,
     get_current_key,
     get_current_key_allow_expired,
@@ -80,6 +83,7 @@ from .schemas import (
     ResonateOut,
     RevokeIn,
     RevokeOut,
+    ReviewOut,
     RotateOut,
     RolloverIn,
     RolloverOut,
@@ -221,6 +225,37 @@ def revoke_key(
     return RevokeOut(key_id=key_id, works_flagged_for_review=flagged)
 
 
+@router.post("/admin/works/{work_id}/approve", response_model=ReviewOut)
+def approve_work(
+    work_id: str,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(require_admin),
+):
+    """Review queue: approve a queued work so it can appear on the feed.
+
+    Only works in moderation_status='review' can be approved; approving
+    a work whose signer was revoked is refused (it could never be
+    delivered). Uploads land in 'review' by default (T2 red-pen item 3)
+    because the v1 classifier is a stub — nothing is auto-approved.
+    """
+    work = admin_review_work(db, work_id, "approved")
+    db.commit()
+    return ReviewOut(work_id=work.id, moderation_status=work.moderation_status)
+
+
+@router.post("/admin/works/{work_id}/reject", response_model=ReviewOut)
+def reject_work(
+    work_id: str,
+    db: Session = Depends(get_db),
+    _admin: bool = Depends(require_admin),
+):
+    """Review queue: reject a queued work. It stays out of the feed and
+    remains visible only to its maker."""
+    work = admin_review_work(db, work_id, "rejected")
+    db.commit()
+    return ReviewOut(work_id=work.id, moderation_status=work.moderation_status)
+
+
 # ------------------------------------------------------------------- works ---
 @router.post("/works", response_model=WorkCreatedOut, status_code=status.HTTP_201_CREATED)
 async def upload_work(
@@ -256,7 +291,11 @@ async def upload_work(
 
     sha = crypto.sha256_bytes(data)
 
-    # Moderation: hard structural rules now, classifier stub for the rest.
+    # Moderation: hard structural rules reject outright; everything else
+    # is queued for human review (T2 red-pen item 3 — no auto-approve
+    # while the classifier is a stub). Only "approved" works reach the
+    # feed; "review" works are visible to their maker until an admin
+    # decides via /admin/works/{id}/approve or .../reject.
     scan = moderation.scan_upload(file.filename or "", file.content_type or "", len(data), sha)
     if scan.status == "rejected":
         raise HTTPException(
