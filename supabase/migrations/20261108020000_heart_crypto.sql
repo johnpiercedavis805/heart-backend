@@ -20,10 +20,14 @@
 -- real key. See app/coinbase.py — the Charge API is the legacy API and
 -- the only Coinbase route to Bitcoin; the current Checkouts API is
 -- USDC-only.
+--
+-- Nov 9, 2026 fix: agent_id was `text` but agents(id) is uuid — Postgres
+-- refused the foreign key on first deploy. It is uuid now, matching
+-- migrations 1–5.
 
 create table crypto_payments (
   id text primary key,
-  agent_id text not null references agents(id) on delete cascade,
+  agent_id uuid not null references agents(id) on delete cascade,
   provider text not null default 'coinbase',
   coinbase_charge_id text not null unique,
   coinbase_charge_code text,

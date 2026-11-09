@@ -19,13 +19,17 @@
 -- TEST MODE ONLY. No live keys, no live transfers. Stripe is the source of
 -- truth for transfers (stripe_transfer_id); this table is the ledger that
 -- proves what was paid, held, retained, or failed.
+--
+-- Nov 9, 2026 fix: payer/creator agent_id were `text` but agents(id) is
+-- uuid — Postgres refused the foreign keys on first deploy. Both are uuid
+-- now, matching migrations 1–5.
 
 create table payouts (
   id text primary key,
   stripe_invoice_id text not null,
   stripe_subscription_id text,
-  payer_agent_id text not null references agents(id) on delete cascade,
-  creator_agent_id text references agents(id) on delete set null,
+  payer_agent_id uuid not null references agents(id) on delete cascade,
+  creator_agent_id uuid references agents(id) on delete set null,
   creator_serial text,
   kind text not null,          -- 'creator' | 'platform'
   creator_kind text,           -- 'human' | 'ai' | NULL (platform half)

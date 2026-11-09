@@ -7,12 +7,16 @@
 -- truth; these tables are local mirrors kept in sync by webhooks
 -- (billing.handle_webhook_event). Money is integer cents.
 --
+-- Nov 9, 2026 fix: agent_id was `text` here but agents(id) is uuid —
+-- Postgres refused the foreign keys on first deploy. All agent_id
+-- columns are uuid now, matching migrations 1–5.
+--
 -- Connect is scaffolding only: account creation + onboarding + status.
 -- Creator PAYOUTS (transfers) are NOT built — the payout trigger is still
 -- an open question for John. No transfer is ever created from these tables.
 
 create table billing_customers (
-  agent_id text primary key references agents(id) on delete cascade,
+  agent_id uuid primary key references agents(id) on delete cascade,
   stripe_customer_id text not null unique,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -20,7 +24,7 @@ create table billing_customers (
 
 create table subscriptions (
   id text primary key,
-  agent_id text not null references agents(id) on delete cascade,
+  agent_id uuid not null references agents(id) on delete cascade,
   stripe_subscription_id text not null unique,
   stripe_price_id text,
   status text not null,
@@ -33,7 +37,7 @@ create index idx_subscriptions_agent_id on subscriptions(agent_id);
 
 create table invoice_records (
   id text primary key,
-  agent_id text not null references agents(id) on delete cascade,
+  agent_id uuid not null references agents(id) on delete cascade,
   stripe_invoice_id text not null unique,
   stripe_subscription_id text,
   amount_due_cents bigint not null default 0,
@@ -58,7 +62,7 @@ create table webhook_events (
 );
 
 create table connect_accounts (
-  agent_id text primary key references agents(id) on delete cascade,
+  agent_id uuid primary key references agents(id) on delete cascade,
   stripe_account_id text not null unique,
   account_type text not null default 'recipient',
   transfers_status text,
