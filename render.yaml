@@ -63,9 +63,9 @@ services:
       # ?session_id={CHECKOUT_SESSION_ID} to the success URL; the page
       # reads it and can check the live subscription status.
       - key: STRIPE_CHECKOUT_SUCCESS_URL
-        value: "https://heart-api.onrender.com/subscribe/success?session_id={CHECKOUT_SESSION_ID}"
+        value: "https://heart-api-ifsr.onrender.com/subscribe/success?session_id={CHECKOUT_SESSION_ID}"
       - key: STRIPE_CHECKOUT_CANCEL_URL
-        value: "https://heart-api.onrender.com/subscribe/cancel"
+        value: "https://heart-api-ifsr.onrender.com/subscribe/cancel"
       # Registry verification signer — recommended for production so the
       # public key in /registry/:serial/verify survives restarts
       # (T2 red-pen item 6). 64 hex chars; generate like the signing key.
