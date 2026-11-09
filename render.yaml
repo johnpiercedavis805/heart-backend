@@ -19,7 +19,7 @@ services:
     # Render sets PORT automatically; the Dockerfile CMD already uses
     # ${PORT:-8000}, so no port env var is set here.
     envVars:
-      # Uploads live on the persistent disk (see `disks` below), not in
+      # Uploads live on the persistent disk (see `disk` below), not in
       # the container filesystem — without the disk, uploads vanish on
       # every redeploy (Dockerfile VOLUME /data + T2 red-pen note).
       - key: UPLOAD_DIR
@@ -73,10 +73,10 @@ services:
         sync: false
       - key: COINBASE_WEBHOOK_SECRET
         sync: false
-    disks:
-      - name: heart-uploads
-        mountPath: /data
-        sizeGB: 1
+    disk:
+      name: heart-uploads
+      mountPath: /data
+      sizeGB: 1
 
 databases:
   - name: heart-db
