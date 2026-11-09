@@ -3,8 +3,11 @@
 # or `render blueprint launch`. See docs/deploy-runbook.md for the order
 # of operations — migrations run BEFORE the first successful boot.
 #
-# Cost: web (starter, ~$7/mo) + Postgres (starter, ~$6/mo) = ~$13/mo,
-# which is the paid-infra figure John approved Nov 8, 2026.
+# Cost: web (starter, ~$7/mo) + Postgres (0.1c-256mb, ~$6/mo compute)
+# = ~$13/mo compute, plus a few dollars of Postgres storage. Render
+# retired the legacy Postgres 'starter' plan in 2026; 0.1c-256mb is the
+# new smallest paid plan. John approved ~$13/mo Nov 8, 2026 — the review
+# screen shows the real total before Apply.
 # The web service uses the repo's Dockerfile (Docker runtime), which
 # installs psycopg[binary] and runs uvicorn on ${PORT} (Render injects it).
 
@@ -80,7 +83,9 @@ services:
 
 databases:
   - name: heart-db
-    plan: starter
+    # Smallest paid Postgres plan (0.1c-256mb, ~$6/mo compute). The legacy
+    # 'starter' plan ID is no longer accepted for new databases (2026).
+    plan: 0.1c-256mb
     region: oregon
     # Postgres 16. The migration runner (scripts/apply_migrations.py)
     # connects with this database's connection string (auto-wired above

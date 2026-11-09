@@ -7,10 +7,12 @@ smoke checkout. The live-charge go-live is a separate, deliberate step
 
 **What this deploy is:** `render.yaml` (Render Blueprint) defines one
 Docker web service (`heart-api`, the repo's `Dockerfile`) and one
-Render Postgres database (`heart-db`). ~$13/month total (web starter
-~$7 + Postgres starter ~$6) — the paid-infra figure John approved
-Nov 8, 2026. No Supabase project is required for this path; §1 covers
-the Supabase alternative.
+Render Postgres database (`heart-db`). ~$13/month in compute (web starter
+~$7 + Postgres 0.1c-256mb ~$6), plus a few dollars of Postgres storage —
+the paid-infra figure John approved Nov 8, 2026 was ~$13/mo; Render
+retired the legacy Postgres 'starter' plan in 2026, so the Blueprint now
+uses plan ID 0.1c-256mb. No Supabase project is required for this path;
+§1 covers the Supabase alternative.
 
 **Do not run any step with a real secret value in a shell history,
 chat message, or commit.** Keys are generated or copied from a
