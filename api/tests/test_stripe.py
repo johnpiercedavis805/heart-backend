@@ -407,6 +407,35 @@ def main() -> int:
     db.close()
     check("invoice.paid processed exactly once", n == 1, f"count={n}")
 
+    # A Checkout subscription's first invoice can arrive with subscription
+    # null (seen live Nov 9, 2026 — the mirror and the payout rows copied
+    # from it were left unlinked). The mirror must fall back to the
+    # agent's active subscription so the invoice stays linked.
+    inv_nosub = {
+        "id": "in_test_nosub1",
+        "customer": "cus_test_alice",
+        "subscription": None,
+        "amount_due": 999,
+        "amount_paid": 999,
+        "currency": "usd",
+        "status": "paid",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/in_test_nosub1",
+        "metadata": {"agent_id": agent_id},
+        "status_transitions": {"paid_at": int(time.time())},
+    }
+    payload = event_payload("evt_test_nosub1", "invoice.paid", inv_nosub)
+    r = client.post("/billing/webhooks", content=payload,
+                    headers={"stripe-signature": sign_payload(payload, whsec)})
+    check("webhook invoice.paid with null subscription 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
+    check("webhook invoice.paid with null subscription processed",
+          r.json().get("result") == "processed", r.text[:200])
+    db = SessionLocal()
+    row = db.query(InvoiceRecord).filter(InvoiceRecord.stripe_invoice_id == "in_test_nosub1").one_or_none()
+    db.close()
+    check("invoice with null subscription links to agent's active subscription",
+          row is not None and row.stripe_subscription_id == "sub_test_sheet1",
+          f"got {row.stripe_subscription_id if row else None}")
+
     # invoice.payment_failed -> subscription past_due
     inv_failed = {**inv_paid, "id": "in_test_failed1", "status": "open", "amount_paid": 0}
     payload = event_payload("evt_test_failed1", "invoice.payment_failed", inv_failed)

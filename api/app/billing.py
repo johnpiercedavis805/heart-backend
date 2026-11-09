@@ -618,6 +618,20 @@ def _sync_invoice(db: Session, inv, *, paid: bool) -> str:
     )
     if not agent_id:
         return "ignored-no-agent"
+    sub_id = _get(inv, "subscription")
+    if not sub_id:
+        # Fallback: a Checkout subscription's first invoice can arrive
+        # with subscription null (seen Nov 9, 2026 — the invoice mirror
+        # and the payout rows copied from it were left unlinked, so a
+        # lookup by subscription id found nothing). Resolve the agent's
+        # active subscription so the invoice stays linked.
+        sub_row = (
+            db.query(Subscription)
+            .filter(Subscription.agent_id == agent_id, Subscription.status == "active")
+            .order_by(Subscription.created_at.desc())
+            .first()
+        )
+        sub_id = sub_row.stripe_subscription_id if sub_row else None
     row = (
         db.query(InvoiceRecord)
         .filter(InvoiceRecord.stripe_invoice_id == inv["id"])
@@ -631,7 +645,7 @@ def _sync_invoice(db: Session, inv, *, paid: bool) -> str:
         row = InvoiceRecord(
             agent_id=agent_id,
             stripe_invoice_id=inv["id"],
-            stripe_subscription_id=_get(inv, "subscription"),
+            stripe_subscription_id=sub_id,
             amount_due_cents=amount_due,
             amount_paid_cents=amount_paid,
             currency=currency,
@@ -646,13 +660,13 @@ def _sync_invoice(db: Session, inv, *, paid: bool) -> str:
         row.amount_paid_cents = amount_paid
         row.currency = currency
         row.hosted_invoice_url = _get(inv, "hosted_invoice_url")
-        row.stripe_subscription_id = _get(inv, "subscription")
+        row.stripe_subscription_id = sub_id or row.stripe_subscription_id
         if paid:
             row.paid_at = _from_ts(paid_at)
-    if paid and _get(inv, "subscription"):
+    if paid and sub_id:
         sub_row = (
             db.query(Subscription)
-            .filter(Subscription.stripe_subscription_id == inv["subscription"])
+            .filter(Subscription.stripe_subscription_id == sub_id)
             .one_or_none()
         )
         if sub_row is not None:
