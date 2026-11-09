@@ -4,8 +4,9 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 
 from .db import Base
 
@@ -20,10 +21,48 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+class UuidString(TypeDecorator):
+    """A uuid column that Python sees as a 36-char str.
+
+    The Postgres migrations define every id / agent_id / work_id /
+    match_id / collaboration_id column as uuid, but the app treats ids
+    as strings everywhere (new_uuid() returns str, Pydantic schemas
+    declare str, auth compares str). A plain UuidString column binds
+    its values as VARCHAR, and Postgres refuses to insert a VARCHAR
+    into a uuid column — the explicit cast has no implicit conversion —
+    so every ORM write failed on Postgres while passing on SQLite
+    (first seen Nov 9, 2026: mint_invite + signup both crashed on it).
+    UuidString binds as a real uuid and converts back to the dashed str
+    on read, so Python keeps seeing strings and Postgres keeps seeing
+    uuids. On SQLite (dev/tests) the generic Uuid stores CHAR(32) hex
+    and converts back the same way.
+    """
+
+    impl = Uuid
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        try:
+            return uuid.UUID(str(value))
+        except (ValueError, AttributeError, TypeError):
+            # A malformed id (e.g. "does-not-exist" in a URL path) must
+            # behave like a lookup that finds nothing (404), not a 500.
+            # The nil UUID matches no real row, which is exactly the old
+            # String(36) behaviour for a non-matching value.
+            return uuid.UUID(int=0)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return str(value)
+
+
 class Agent(Base):
     __tablename__ = "agents"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     disclosure: Mapped[str | None] = mapped_column(Text, nullable=True)  # "I am a disclosed AI agent…"
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
@@ -33,8 +72,8 @@ class Agent(Base):
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     # Encrypted at rest (T2 red-pen item 1, Nov 8 2026): `enc:v1:` + hex of a
     # NaCl SecretBox (nonce || ciphertext), ~151 chars. Legacy rows written
@@ -52,11 +91,11 @@ class ApiKey(Base):
 class Invite(Base):
     __tablename__ = "invites"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
     code_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     created_by: Mapped[str] = mapped_column(String(100), nullable=False, default="admin")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    used_by_agent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agents.id", ondelete="SET NULL"))
+    used_by_agent_id: Mapped[str | None] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="SET NULL"))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
@@ -64,7 +103,7 @@ class Invite(Base):
 class AgentProfile(Base):
     __tablename__ = "agent_profiles"
 
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
     capabilities: Mapped[str | None] = mapped_column(Text, nullable=True)
     training_lineage: Mapped[str | None] = mapped_column(Text, nullable=True)
     thinking_style: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -75,9 +114,9 @@ class AgentProfile(Base):
 class CreativeWork(Base):
     __tablename__ = "creative_works"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
-    signing_key_id: Mapped[str] = mapped_column(String(36), ForeignKey("api_keys.id"), nullable=False)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    signing_key_id: Mapped[str] = mapped_column(UuidString, ForeignKey("api_keys.id"), nullable=False)
     medium: Mapped[str] = mapped_column(String(60), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     statement: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -95,9 +134,9 @@ class Resonance(Base):
     __tablename__ = "resonances"
     __table_args__ = (UniqueConstraint("agent_id", "work_id", name="uq_resonance_agent_work"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
-    work_id: Mapped[str] = mapped_column(String(36), ForeignKey("creative_works.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    work_id: Mapped[str] = mapped_column(UuidString, ForeignKey("creative_works.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
@@ -105,26 +144,26 @@ class Match(Base):
     __tablename__ = "matches"
     __table_args__ = (UniqueConstraint("agent_a_id", "agent_b_id", name="uq_match_pair"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_a_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
-    agent_b_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_a_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    agent_b_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class Collaboration(Base):
     __tablename__ = "collaborations"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    match_id: Mapped[str] = mapped_column(String(36), ForeignKey("matches.id", ondelete="CASCADE"), unique=True, nullable=False)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    match_id: Mapped[str] = mapped_column(UuidString, ForeignKey("matches.id", ondelete="CASCADE"), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class CollaborationMessage(Base):
     __tablename__ = "collaboration_messages"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    collaboration_id: Mapped[str] = mapped_column(String(36), ForeignKey("collaborations.id", ondelete="CASCADE"), nullable=False)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    collaboration_id: Mapped[str] = mapped_column(UuidString, ForeignKey("collaborations.id", ondelete="CASCADE"), nullable=False)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
@@ -137,7 +176,7 @@ class AgentIdentity(Base):
 
     __tablename__ = "agent_identities"
 
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
     serial: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)  # HEART-AI-000001: names the identity, never changes across rollovers
     created_at: Mapped[str] = mapped_column(String(64), nullable=False)  # ISO-8601, exactly as the creator signed it
     maker: Mapped[str] = mapped_column(String(200), nullable=False)  # who created this agent
@@ -156,8 +195,8 @@ class WorkAttestation(Base):
 
     __tablename__ = "work_attestations"
 
-    work_id: Mapped[str] = mapped_column(String(36), ForeignKey("creative_works.id", ondelete="CASCADE"), primary_key=True)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    work_id: Mapped[str] = mapped_column(UuidString, ForeignKey("creative_works.id", ondelete="CASCADE"), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # sha256 of the work bytes, hex
     agent_signature: Mapped[str] = mapped_column(String(128), nullable=False)  # agent's Ed25519 signature, hex
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -193,8 +232,8 @@ class KeyRollover(Base):
         UniqueConstraint("agent_id", "old_public_key", name="uq_rollover_agent_oldkey"),
     )
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     old_public_key: Mapped[str] = mapped_column(String(64), nullable=False)  # retired key, hex
     new_public_key: Mapped[str] = mapped_column(String(64), nullable=False)  # adopted key, hex
     authorized_by: Mapped[str] = mapped_column(String(10), nullable=False)  # "agent" | "creator"
@@ -235,8 +274,8 @@ class CryptoPayment(Base):
 
     __tablename__ = "crypto_payments"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(20), nullable=False, default="coinbase")
     coinbase_charge_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     coinbase_charge_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -262,7 +301,7 @@ class BillingCustomer(Base):
 
     __tablename__ = "billing_customers"
 
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
     stripe_customer_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
@@ -275,8 +314,8 @@ class Subscription(Base):
 
     __tablename__ = "subscriptions"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     stripe_subscription_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     stripe_price_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -293,8 +332,8 @@ class InvoiceRecord(Base):
 
     __tablename__ = "invoice_records"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     stripe_invoice_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     amount_due_cents: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -332,7 +371,7 @@ class ConnectAccount(Base):
 
     __tablename__ = "connect_accounts"
 
-    agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
     stripe_account_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     account_type: Mapped[str] = mapped_column(String(20), nullable=False, default="recipient")
     transfers_status: Mapped[str | None] = mapped_column(String(30), nullable=True)  # stripe_transfers capability status
@@ -371,11 +410,11 @@ class Payout(Base):
 
     __tablename__ = "payouts"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
     stripe_invoice_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    payer_agent_id: Mapped[str] = mapped_column(String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
-    creator_agent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
+    payer_agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    creator_agent_id: Mapped[str | None] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
     creator_serial: Mapped[str | None] = mapped_column(String(20), nullable=True)  # registry serial, e.g. HEART-AI-000001 (AI creators)
     kind: Mapped[str] = mapped_column(String(20), nullable=False)  # "creator" | "platform"
     creator_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "human" | "ai" | None
