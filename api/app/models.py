@@ -21,6 +21,24 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+def as_naive_utc(dt: datetime | None) -> datetime | None:
+    """Coerce a datetime to naive UTC for comparison with utcnow().
+
+    Postgres timestamptz columns come back offset-aware (psycopg
+    attaches UTC); SQLite returns them naive. utcnow() is naive by
+    design (see above). Comparing naive with aware raises TypeError,
+    which broke every authenticated request on Postgres (first seen
+    Nov 9, 2026: auth.get_current_key crashed comparing now with the
+    key's expires_at). Normalise the DB value to naive UTC before
+    comparing.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 class UuidString(TypeDecorator):
     """A uuid column that Python sees as a 36-char str.
 

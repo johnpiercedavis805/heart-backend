@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from . import crypto
 from .config import settings
 from .db import get_db
-from .models import ApiKey, CreativeWork, utcnow
+from .models import ApiKey, CreativeWork, as_naive_utc, utcnow
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -44,10 +44,10 @@ def get_current_key(
     if row.status == "revoked":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key revoked")
     if row.status == "rotated":
-        if not row.grace_until or now > row.grace_until:
+        if not row.grace_until or now > as_naive_utc(row.grace_until):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "rotation grace period expired — use the new key")
         return row  # within grace: still valid
-    if row.status == "active" and now > row.expires_at:
+    if row.status == "active" and now > as_naive_utc(row.expires_at):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key expired — rotate it via POST /keys/rotate")
     if row.status != "active":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "API key not active")
