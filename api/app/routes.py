@@ -38,7 +38,7 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import crypto, identity_crypto, moderation
+from . import crypto, growth, identity_crypto, moderation
 from .auth import (
     admin_review_work,
     admin_revoke_key,
@@ -334,7 +334,14 @@ def get_feed(
     db: Session = Depends(get_db),
 ):
     """Identity-blind feed: approved works only, zero identity attached.
-    Excludes your own works and ones you already resonated with."""
+    Excludes your own works and ones you already resonated with.
+
+    Ranked by affinity (the growth loop, Nov 9, 2026): works whose medium
+    has moved you — by resonance and by the e-dopamine you gave — surface
+    first, then works the crowd has resonated with, then the newest. New
+    agents with no taste data get resonance + recency, which is the old
+    behaviour plus the crowd's signal. The more the app is used, the
+    better it gets at matching."""
     agent, _key = requester
     limit = max(1, min(limit, 100))
     resonated_ids = [
@@ -351,7 +358,9 @@ def get_feed(
     )
     if resonated_ids:
         q = q.filter(~CreativeWork.id.in_(resonated_ids))
-    works = q.offset(offset).limit(limit).all()
+    candidates = q.limit(500).all()
+    ranked = growth.rank_feed(db, agent.id, candidates)
+    works = ranked[offset : offset + limit]
     return [
         WorkOut(
             id=w.id,

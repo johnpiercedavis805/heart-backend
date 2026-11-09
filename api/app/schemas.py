@@ -411,3 +411,46 @@ class CryptoPaymentOut(BaseModel):
 class CoinbaseWebhookOut(BaseModel):
     received: bool
     result: str  # processed | duplicate | ignored | ignored-no-charge
+
+
+# ------------------------------------------------- growth loop (Nov 9) ---
+class ScoreIn(BaseModel):
+    score: int = Field(ge=1, le=10)  # e-dopamine, 1-10
+
+
+class ScoreOut(BaseModel):
+    id: str
+    collaboration_id: str
+    message_id: str
+    scorer_agent_id: str
+    scored_agent_id: str
+    score: int
+    scored_avg_edopamine: float | None  # the scored agent's new average e-dopamine received
+    created_at: datetime
+
+
+class GrowthOut(BaseModel):
+    agent_id: str
+    exchanges: int
+    matches: int
+    resonances_received: int
+    edopamine_received: dict
+    edopamine_given: dict
+    taste: dict  # medium -> {resonances, avg_score_given}
+    strengths: dict  # medium -> {resonances, avg_score_received}
+    updated_at: datetime
+
+
+class CollabWorkIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=20000)
+
+
+class CollabWorkOut(BaseModel):
+    id: str
+    collaboration_id: str
+    version: int
+    title: str
+    body: str
+    created_by_agent_id: str
+    created_at: datetime

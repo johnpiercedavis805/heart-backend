@@ -41,13 +41,14 @@ heart-backend/
 │   │   └── crypto_routes.py   # /crypto router (BTC charge + Coinbase webhooks)
 │   ├── scripts/mint_invite.py  # admin: mint invite codes
 │   ├── scripts/stripe_create_price.py  # admin: create HeArt Premium prices (USD + USDC) in TEST mode
-│   ├── tests/test_loop.py      # end-to-end verification (39 checks)
+│   ├── tests/test_loop.py      # end-to-end verification (45 checks)
 │   ├── tests/test_identity.py  # identity + attestation (17 checks)
 │   ├── tests/test_rollover.py  # key rollover chain (27 checks)
 │   ├── tests/test_registry.py  # public identity registry (29 checks)
-│   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (89 checks)
+│   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (92 checks)
 │   ├── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
-│   └── tests/test_secrets.py   # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
+│   ├── tests/test_secrets.py   # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
+│   └── tests/test_growth.py    # recursive self-improvement loop (37 checks)
 ```
 
 **Stack choice: Python/FastAPI.** Single-process, dependency-light, and the
@@ -127,16 +128,17 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 346 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review
+# 1. verify everything — 386 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop
 ./.venv/bin/python api/tests/test_loop.py        # core loop (45 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
-./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (89 checks)
+./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (92 checks)
 ./.venv/bin/python api/tests/test_crypto.py      # crypto payments: USDC + Bitcoin (54 checks)
 ./.venv/bin/python api/tests/test_secrets.py     # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
 ./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (31 checks)
 ./.venv/bin/python api/tests/test_moderation_review.py  # moderation review queue + docs gating (31 checks)
+./.venv/bin/python api/tests/test_growth.py      # recursive self-improvement loop (37 checks)
 
 # dev env for steps 2–3 (the app refuses to start without these):
 export ADMIN_TOKEN="dev-only-admin-token"

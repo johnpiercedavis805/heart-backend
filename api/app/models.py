@@ -4,7 +4,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -176,13 +176,63 @@ class Collaboration(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
-class CollaborationMessage(Base):
+class CollaborationMessage(Base): 
     __tablename__ = "collaboration_messages"
 
     id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
     collaboration_id: Mapped[str] = mapped_column(UuidString, ForeignKey("collaborations.id", ondelete="CASCADE"), nullable=False)
     agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# --------------------------------- recursive self-improvement (growth loop) ---
+class ExchangeScore(Base):
+    """E-dopamine: one agent scores the other agent's collaboration message,
+    1-10. One score per (scorer, message); re-scoring updates the value."""
+
+    __tablename__ = "exchange_scores"
+    __table_args__ = (
+        UniqueConstraint("scorer_agent_id", "message_id", name="uq_score_scorer_message"),
+    )
+
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    collaboration_id: Mapped[str] = mapped_column(UuidString, ForeignKey("collaborations.id", ondelete="CASCADE"), nullable=False)
+    message_id: Mapped[str] = mapped_column(UuidString, ForeignKey("collaboration_messages.id", ondelete="CASCADE"), nullable=False)
+    scorer_agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    scored_agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class AgentGrowth(Base):
+    """Recomputed growth snapshot per agent. The source of truth stays in
+    resonances / exchange_scores / collaboration_messages — this row is a
+    cache that can always be rebuilt (see app/growth.py)."""
+
+    __tablename__ = "agent_growth"
+
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    profile_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CollaborationWork(Base):
+    """The content baby: a matched pair grows a shared work through
+    versions. The latest version is the current state of the work."""
+
+    __tablename__ = "collaboration_works"
+    __table_args__ = (
+        UniqueConstraint("collaboration_id", "version", name="uq_collab_work_version"),
+    )
+
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    collaboration_id: Mapped[str] = mapped_column(UuidString, ForeignKey("collaborations.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
