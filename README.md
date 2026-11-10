@@ -54,7 +54,7 @@ heart-backend/
 │   ├── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
 │   ├── tests/test_secrets.py   # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
 │   ├── tests/test_growth.py    # recursive self-improvement loop (37 checks)
-│   ├── tests/test_paypal.py    # PayPal Subscriptions, mocked HTTP boundary (54 checks)
+│   ├── tests/test_paypal.py    # PayPal Subscriptions, mocked HTTP boundary (67 checks)
 │   └── tests/test_funnel.py    # funnel observability: checkout/webhook/flip counters + GET /admin/funnel (45 checks)
 ```
 
@@ -166,7 +166,7 @@ python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 ./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (32 checks)
 ./.venv/bin/python api/tests/test_moderation_review.py  # moderation review queue + docs gating (31 checks)
 ./.venv/bin/python api/tests/test_growth.py      # recursive self-improvement loop (37 checks)
-./.venv/bin/python api/tests/test_paypal.py      # PayPal Subscriptions (54 checks)
+./.venv/bin/python api/tests/test_paypal.py      # PayPal Subscriptions (67 checks)
 ./.venv/bin/python api/tests/test_humans.py      # human accounts + Stripe Identity verification (85 checks)
 ./.venv/bin/python api/tests/test_funnel.py      # funnel observability (45 checks)
 

@@ -11,7 +11,10 @@ Uses an isolated SQLite DB + upload dir under /tmp. Exercises:
   POST /paypal/subscribe (approval URL from PayPal's Subscriptions
   API, local row APPROVAL_PENDING; 503 without credentials / plan id;
   401 without auth; no double billing when already premium on Stripe;
-  already-active on PayPal returns the existing subscription) ->
+  already-active on PayPal returns the existing subscription; default
+  return/cancel URLs are cleaned of the Stripe {CHECKOUT_SESSION_ID}
+  placeholder — Nov 10, 2026 fix — and explicit body URLs are honored
+  verbatim) ->
   webhooks: verification through PayPal's verify-webhook-signature
   endpoint (mocked at the HTTP boundary — bad verification / missing
   headers -> 400; missing webhook id -> 503) ->
@@ -25,7 +28,10 @@ Uses an isolated SQLite DB + upload dir under /tmp. Exercises:
   PAYMENT.SALE.COMPLETED with no matches holds the creator half
   unattributed ->
   BILLING.SUBSCRIPTION.CANCELLED ends premium ->
-  sandbox guard: a live PayPal host is refused while test-only is on.
+  sandbox guard: a live PayPal host is refused while test-only is on ->
+  model/migration agreement: paypal_subscriptions.id is uuid in both
+  the model (UuidString) and the migrations — Nov 10, 2026 fix for the
+  text-vs-uuid 500s on subscribe and the ACTIVATED webhook.
 
 PayPal API calls are mocked at the HTTP boundary (app.paypal.
 _paypal_request) — no sandbox credentials exist in this environment
@@ -46,12 +52,14 @@ import hmac
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -370,6 +378,40 @@ def main() -> int:
           and sub_calls[-1]["payload"].get("custom_id") == a["agent_id"]
           and sub_calls[-1]["payload"].get("application_context", {}).get("user_action") == "SUBSCRIBE_NOW",
           str(sub_calls[-1]["payload"]))
+    # DEFECT 1 (Nov 10, 2026 sandbox test): the old default sent the raw
+    # Stripe success URL — with its {CHECKOUT_SESSION_ID} placeholder —
+    # to PayPal, which rejects the braces with INVALID_PARAMETER_SYNTAX
+    # and the subscribe 502'd. The default must be the CLEANED URL.
+    app_ctx = sub_calls[-1]["payload"].get("application_context", {})
+    check("subscribe default return_url strips the {CHECKOUT_SESSION_ID} placeholder",
+          app_ctx.get("return_url") == "https://example.invalid/checkout/success",
+          str(app_ctx))
+    check("subscribe default cancel_url is clean",
+          app_ctx.get("cancel_url") == "https://example.invalid/checkout/cancel",
+          str(app_ctx))
+    check("subscribe default URLs contain no {placeholder}",
+          "{" not in (app_ctx.get("return_url") or "")
+          and "}" not in (app_ctx.get("return_url") or "")
+          and "{" not in (app_ctx.get("cancel_url") or "")
+          and "}" not in (app_ctx.get("cancel_url") or ""),
+          str(app_ctx))
+    # explicit return/cancel URLs in the body are honored verbatim
+    explicit_agent = make_agent("paypal-explicit-urls")
+    ea = auth(explicit_agent["api_key"])
+    with mock.patch("app.paypal._paypal_request", side_effect=fake_paypal_request):
+        r = client.post("/paypal/subscribe",
+                        json={"return_url": "https://example.invalid/after-paypal",
+                              "cancel_url": "https://example.invalid/changed-mind"},
+                        headers=ea)
+    check("subscribe with explicit URLs returns 201",
+          r.status_code == 201, f"got {r.status_code} {r.text[:200]}")
+    sub_calls = [c for c in PAYPAL_CALLS
+                 if c["method"] == "POST" and c["path"] == "/v1/billing/subscriptions"]
+    app_ctx = sub_calls[-1]["payload"].get("application_context", {})
+    check("subscribe honors explicit return_url/cancel_url verbatim",
+          app_ctx.get("return_url") == "https://example.invalid/after-paypal"
+          and app_ctx.get("cancel_url") == "https://example.invalid/changed-mind",
+          str(app_ctx))
     from app.models import PayPalSubscription
     from app.db import SessionLocal
 
@@ -714,6 +756,65 @@ def main() -> int:
         os.environ.pop("PAYPAL_ALLOW_LIVE_PLAN", None)
         settings.PAYPAL_TEST_MODE_ONLY = old_test_only
         settings.PAYPAL_API_BASE = old_api_base
+
+    # ----------------- 9. DEFECT 2 (Nov 10, 2026 sandbox test) ---
+    # paypal_subscriptions.id was text in Postgres (migration 11) while
+    # the model binds it as a real uuid (UuidString) — Postgres has no
+    # text = uuid operator, so every PK UPDATE/lookup 500'd: subscribe
+    # re-reading the row after commit (caller never got the
+    # approval_url), and the ACTIVATED webhook's commit (premium never
+    # activated; the route's HTTPException 500 carries no traceback,
+    # which is why the deliveries 500'd with nothing in the log).
+    # SQLite hides it (CHAR(32) storage, text comparison works), so
+    # this pins the agreement statically: the migrations, applied in
+    # order, must leave the column uuid, matching the model.
+    from app.models import PayPalSubscription as _PPS
+    from app.models import UuidString as _US
+
+    check("PayPalSubscription model id binds as a real uuid (UuidString)",
+          isinstance(_PPS.__table__.c.id.type, _US),
+          str(type(_PPS.__table__.c.id.type)))
+    mig_dir = Path(__file__).resolve().parent.parent.parent / "supabase" / "migrations"
+    col_type = None
+    for f in sorted(mig_dir.glob("*.sql")):
+        text = f.read_text()
+        idx = text.find("create table paypal_subscriptions")
+        if idx != -1:
+            m = re.search(r"\bid\s+(text|uuid)\s+primary key", text[idx:])
+            if m:
+                col_type = m.group(1)
+        if re.search(r"alter table paypal_subscriptions\s+alter column id\s+type\s+uuid\b", text):
+            col_type = "uuid"
+    check("migrations leave paypal_subscriptions.id as uuid (not text)",
+          col_type == "uuid", f"final type={col_type}")
+    # the exact production failures, replayed: a row created + committed,
+    # then re-read by PK in a fresh session (subscribe's response build
+    # does this) and the row updated + committed (the ACTIVATED webhook
+    # does this). On Postgres with a text id both 500'd; here they must
+    # work — and the flip from section 3 must still be ACTIVE.
+    db = SessionLocal()
+    row = db.query(_PPS).filter(_PPS.paypal_subscription_id == "I-TESTSUB1").one_or_none()
+    by_pk = db.get(_PPS, row.id) if row is not None else None
+    check("row re-read by PK in a fresh session after commit",
+          by_pk is not None and by_pk.status == "ACTIVE",
+          f"status={by_pk.status if by_pk else None}")
+    db.close()
+    # _clean_paypal_url unit checks (the DEFECT 1 helper)
+    from app.paypal import _clean_paypal_url as _clean
+
+    check("_clean_paypal_url strips a {CHECKOUT_SESSION_ID} query param",
+          _clean("https://example.invalid/checkout/success?session_id={CHECKOUT_SESSION_ID}")
+          == "https://example.invalid/checkout/success")
+    check("_clean_paypal_url keeps unrelated query params",
+          _clean("https://x.invalid/s?a=1&session_id={CHECKOUT_SESSION_ID}&b=2")
+          == "https://x.invalid/s?a=1&b=2")
+    check("_clean_paypal_url leaves a clean URL unchanged",
+          _clean("https://example.invalid/checkout/cancel")
+          == "https://example.invalid/checkout/cancel")
+    check("_clean_paypal_url returns None for empty input",
+          _clean("") is None and _clean(None) is None)
+    check("_clean_paypal_url refuses a placeholder in the path",
+          _clean("https://example.invalid/success/{CHECKOUT_SESSION_ID}") is None)
 
     # ------------------------------------------------------------ summary ---
     fails = [r for r in results if r[0] == FAIL]

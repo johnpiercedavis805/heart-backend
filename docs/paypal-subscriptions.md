@@ -94,6 +94,50 @@ sandbox. Nothing here costs money; sandbox accounts are play money.
    be applied to the production Postgres first:
    `DATABASE_URL=... python scripts/apply_migrations.py --yes`.
 
+## Nov 10, 2026 sandbox fixes (end-to-end test defects)
+
+The Nov 10 sandbox end-to-end test (subscribe -> approve -> ACTIVATED
+-> SALE -> cancel) found two defects; both are fixed in the code, and
+the sandbox re-run is still needed to verify them live:
+
+1. **Return URL placeholder (subscribe 502).** `POST /paypal/subscribe`
+   with no body defaulted `return_url` to the Stripe success URL,
+   `https://heart-api-ifsr.onrender.com/subscribe/success?session_id={CHECKOUT_SESSION_ID}`.
+   PayPal rejects the braces with `INVALID_PARAMETER_SYNTAX`. The fix
+   (`app/paypal.py`, `_clean_paypal_url`): the PayPal default strips
+   any `{...}` placeholder (dropping the query param that carries it),
+   so the default is now the clean `/subscribe/success` page (and
+   `/subscribe/cancel` for cancel). Precedence: explicit body values
+   (honored verbatim) -> `PAYPAL_RETURN_URL` / `PAYPAL_CANCEL_URL`
+   env vars -> cleaned Stripe checkout URLs -> omit the key. The
+   success/cancel pages are shared with Stripe, so their copy is
+   provider-neutral (no "Stripe confirms it" wording for a PayPal
+   buyer). Premium still activates only on the ACTIVATED webhook,
+   never on the redirect alone.
+2. **`paypal_subscriptions.id` text vs uuid (subscribe + webhook 500).**
+   Migration 11 created the PK as `text`, but the model binds it as a
+   real uuid (`UuidString`) — Postgres has no `text = uuid` operator.
+   The INSERT worked (assignment cast) but the subscribe response
+   build (re-read by PK after commit) and the ACTIVATED webhook's
+   commit (UPDATE by PK) both 500'd with
+   `operator does not exist: text = uuid`, so the caller never got the
+   approval_url and premium never activated. The route turns the
+   exception into an HTTPException 500, which FastAPI returns without
+   a Python traceback — that is why the webhook deliveries 500'd
+   repeatedly with nothing in the log. (SALE.COMPLETED still wrote its
+   500c/499c payout rows: `process_payouts_for_invoice` commits them
+   before the handler's final commit fails.) The fix is migration 13
+   (`alter table ... alter column id type uuid using id::uuid`) — the
+   DB layer, not the model: every other id column is uuid in Postgres.
+   Existing rows survive (all ids are app-generated UUID strings).
+   Latent, same defect class, NOT fixed here: `subscriptions`,
+   `invoice_records`, `payouts` and `crypto_payments` also declare
+   `id text primary key` while their models bind `UuidString` — no
+   production flow has done a PK UPDATE/lookup on them yet (Stripe's
+   `_sync_subscription` does update an existing row by PK, so the
+   first `subscription.updated` for an existing Stripe subscription
+   would hit it). Follow-up migration recommended.
+
 ## Going live (future — needs John's yes)
 
 **Do NOT do this until John approves the live PayPal swap.** The
@@ -200,12 +244,15 @@ while `PAYPAL_TEST_MODE_ONLY=1`.
   `GET /paypal/subscriptions`, `POST /paypal/webhooks`.
 - `api/app/models.py` — `PayPalSubscription` mirror table.
 - `supabase/migrations/20261110000000_heart_paypal.sql` — migration 11.
+- `supabase/migrations/20261112000000_heart_paypal_uuid_id.sql` — migration 13 (Nov 10, 2026): `paypal_subscriptions.id` text -> uuid. See "Nov 10, 2026 sandbox fixes" below; apply with `scripts/apply_migrations.py --yes` before the deploy that carries the fix, or subscribe + the ACTIVATED webhook keep 500ing on Postgres.
 - `api/scripts/paypal_create_plan.py` — sandbox product + plan setup;
   `--live` creates the same $9.99/month plan against the live API,
   guarded by `PAYPAL_ALLOW_LIVE_PLAN=1` + `PAYPAL_TEST_MODE_ONLY=0`
   + live `PAYPAL_API_BASE` (see "Going live" above).
-- `api/tests/test_paypal.py` — 54 checks, mocked HTTP boundary
-  (incl. the `--live` guard: refuses without all three opt-ins).
+- `api/tests/test_paypal.py` — 67 checks, mocked HTTP boundary
+  (incl. the `--live` guard: refuses without all three opt-ins; the
+  Nov 10, 2026 fixes: clean default return/cancel URLs, explicit URLs
+  honored verbatim, and the model/migration uuid agreement check).
 - `.env.example` — the five PayPal env vars.
 
 ## Sources (checked Nov 10, 2026)

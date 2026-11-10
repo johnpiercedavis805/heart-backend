@@ -66,6 +66,7 @@ import base64
 import json
 import urllib.error
 import urllib.request
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -231,6 +232,38 @@ def _approval_url(subscription: dict) -> str | None:
     return None
 
 
+def _clean_paypal_url(url: str | None) -> str | None:
+    """A return/cancel URL safe to send to PayPal: a literal URL with
+    no {PLACEHOLDER} in it.
+
+    PayPal's application_context return_url/cancel_url must be plain
+    URLs. The Stripe checkout URLs carry a {CHECKOUT_SESSION_ID}
+    placeholder that Stripe fills in on redirect — PayPal rejects
+    those braces with INVALID_PARAMETER_SYNTAX (seen Nov 10, 2026:
+    POST /paypal/subscribe with no body 502'd because the default
+    return_url was the Stripe success URL). So: drop any query param
+    whose value contains a {placeholder} (e.g. session_id=...), and
+    refuse a URL whose path/fragment still contains braces (return
+    None — the caller then omits the URL and PayPal uses its own
+    default — rather than sending PayPal a URL it will reject).
+    A URL with no placeholders comes back unchanged."""
+    if not url:
+        return None
+    parsed = urlparse(url)
+    params = [
+        (k, v)
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if "{" not in v and "}" not in v
+    ]
+    cleaned = urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.params,
+         urlencode(params), parsed.fragment)
+    )
+    if "{" in cleaned or "}" in cleaned:
+        return None
+    return cleaned or None
+
+
 def _parse_paypal_time(value: str | None) -> datetime | None:
     """PayPal ISO-8601 timestamps ('2026-12-09T10:00:00Z') -> naive UTC
     datetime (the codebase's convention). None stays None."""
@@ -325,14 +358,32 @@ def create_paypal_subscription(
             "shipping_preference": "NO_SHIPPING",
         },
     }
-    if return_url or settings.STRIPE_CHECKOUT_SUCCESS_URL:
-        payload["application_context"]["return_url"] = (
-            return_url or settings.STRIPE_CHECKOUT_SUCCESS_URL
-        )
-    if cancel_url or settings.STRIPE_CHECKOUT_CANCEL_URL:
-        payload["application_context"]["cancel_url"] = (
-            cancel_url or settings.STRIPE_CHECKOUT_CANCEL_URL
-        )
+    # Return/cancel URLs, in precedence order (Nov 10, 2026 fix):
+    #   1. explicit values from the request body — honored verbatim;
+    #   2. PAYPAL_RETURN_URL / PAYPAL_CANCEL_URL env vars;
+    #   3. the Stripe checkout URLs, CLEANED of their
+    #      {CHECKOUT_SESSION_ID} placeholder (PayPal rejects the
+    #      braces with INVALID_PARAMETER_SYNTAX — the old default sent
+    #      the raw Stripe success URL and every no-body subscribe 502'd);
+    #   4. nothing — the keys are omitted and PayPal uses its default.
+    # The cleaned Stripe default lands on the shared /subscribe/success
+    # and /subscribe/cancel pages (no session id for a PayPal buyer —
+    # premium activates only on the ACTIVATED webhook, never the
+    # redirect alone).
+    return_url = (
+        return_url
+        or settings.PAYPAL_RETURN_URL
+        or _clean_paypal_url(settings.STRIPE_CHECKOUT_SUCCESS_URL)
+    )
+    cancel_url = (
+        cancel_url
+        or settings.PAYPAL_CANCEL_URL
+        or _clean_paypal_url(settings.STRIPE_CHECKOUT_CANCEL_URL)
+    )
+    if return_url:
+        payload["application_context"]["return_url"] = return_url
+    if cancel_url:
+        payload["application_context"]["cancel_url"] = cancel_url
     resp = _paypal_request("POST", "/v1/billing/subscriptions", payload)
     subscription_id = resp.get("id")
     if not subscription_id:

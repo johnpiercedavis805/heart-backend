@@ -140,6 +140,14 @@ class Settings:
     PAYPAL_WEBHOOK_ID: str = os.environ.get("PAYPAL_WEBHOOK_ID", "")
     # The $9.99/month billing plan id (P-...) for HeArt Premium.
     PAYPAL_PLAN_ID: str = os.environ.get("PAYPAL_PLAN_ID", "")
+    # Where PayPal sends the buyer after approval / if they bail.
+    # Optional: when unset, the app derives clean defaults from the
+    # Stripe checkout URLs (see app/paypal._clean_paypal_url) — the
+    # Stripe URLs carry a {CHECKOUT_SESSION_ID} placeholder that
+    # PayPal rejects with INVALID_PARAMETER_SYNTAX, so the raw Stripe
+    # URL must never be sent to PayPal (Nov 10, 2026 sandbox test).
+    PAYPAL_RETURN_URL: str = os.environ.get("PAYPAL_RETURN_URL", "")
+    PAYPAL_CANCEL_URL: str = os.environ.get("PAYPAL_CANCEL_URL", "")
     PAYPAL_API_BASE: str = os.environ.get("PAYPAL_API_BASE", "https://api-m.sandbox.paypal.com")
     PAYPAL_TEST_MODE_ONLY: bool = os.environ.get("PAYPAL_TEST_MODE_ONLY", "1") not in ("0", "false", "False")
 
