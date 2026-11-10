@@ -263,6 +263,11 @@ class CheckoutIn(BaseModel):
 class CheckoutOut(BaseModel):
     checkout_url: str
     session_id: str
+    # Payment methods Stripe actually offered for this session (the
+    # compatible subset of CHECKOUT_ALLOWED_PAYMENT_METHOD_TYPES —
+    # e.g. ["card", "cashapp"] when PayPal is filtered out). The buyer
+    # sees exactly these at checkout.
+    payment_method_types: list[str] = []
 
 
 class PaymentSheetIn(BaseModel):

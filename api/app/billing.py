@@ -80,6 +80,16 @@ EPHEMERAL_KEY_API_VERSION = stripe.api_version
 
 PREMIUM_PRODUCT_NAME = "HeArt Premium"
 
+# Payment methods offered at hosted Checkout (subscription mode), via
+# allowed_payment_method_types — see create_checkout_session. "card" is
+# credit/debit (and automatically enables Apple Pay / Google Pay);
+# "cashapp" is Cash App Pay; "paypal" is listed so Stripe offers it if
+# the account ever can (it silently filters out what it can't offer).
+# One-line change to add or drop a method; the split logic never sees
+# the method — it keys off invoice.paid, so new methods can't change
+# the 50/50 payout.
+CHECKOUT_ALLOWED_PAYMENT_METHOD_TYPES = ["card", "cashapp", "paypal"]
+
 
 class BillingNotConfigured(Exception):
     """Billing is not configured (missing key / price / URLs)."""
@@ -230,12 +240,39 @@ def get_or_create_customer(db: Session, agent_id: str) -> BillingCustomer:
 # --------------------------------------------------------------- payments ---
 def create_checkout_session(db: Session, agent_id: str, *, currency: str = "usd") -> dict:
     """Hosted Checkout (App-to-Web path): a Stripe-hosted page for the
-    premium subscription. Returns the URL the mobile app opens. No card
-    data touches HeArt. currency="usdc" uses the USDC-denominated price
-    (same $9.99) — the crypto payment option appears in Checkout once
-    stablecoins are enabled in the Stripe Dashboard (dynamic payment
-    methods); the customer picks a wallet and network on
-    crypto.stripe.com and Stripe settles the payment in USD."""
+    premium subscription. Returns the URL the mobile app opens, plus the
+    payment methods Stripe actually offered for this session
+    (``payment_method_types`` — the ground truth of what the buyer saw:
+    card, Cash App Pay, PayPal, …). No card data touches HeArt.
+    currency="usdc" uses the USDC-denominated price (same $9.99) — the
+    crypto payment option appears in Checkout once stablecoins are
+    enabled in the Stripe Dashboard (dynamic payment methods); the
+    customer picks a wallet and network on crypto.stripe.com and Stripe
+    settles the payment in USD.
+
+    Payment methods (Nov 10, 2026): the session asks Stripe for
+    CHECKOUT_ALLOWED_PAYMENT_METHOD_TYPES via
+    ``allowed_payment_method_types``. That parameter (API version
+    2026-09-30.endive and later) silently drops any method the account
+    can't offer for this session and returns the compatible subset in
+    the session's ``payment_method_types`` — so a method that isn't
+    available never breaks checkout, and the caller can see exactly
+    what was offered. Do NOT pass ``payment_method_types`` here: Stripe
+    removed that parameter from Checkout Sessions in the same API
+    version and requests that include it return a 400.
+    "card" also keeps Apple Pay / Google Pay available (Stripe: the
+    ``card`` type automatically enables both wallets). "cashapp" is
+    Cash App Pay (US business, USD, recurring supported — Stripe docs,
+    "Cash App Pay payments"). "paypal" is listed so Stripe offers it
+    if the account ever can — but Stripe's native PayPal is only for
+    businesses in supported European countries (docs.stripe.com/
+    payments/paypal) and this is a US account, so expect it to be
+    filtered out; the PayPal path for a US account is a PayPal custom
+    payment method through HeArt's own PayPal account — see
+    docs/payment-methods-paypal-cashapp-venmo.md. Every listed method
+    must also be switched on in the Stripe Dashboard (test mode:
+    Settings → Payment methods) before it appears — a listed-but-off
+    method is silently skipped, not an error."""
     s = _stripe()
     price = _require_price(currency)
     if not settings.STRIPE_CHECKOUT_SUCCESS_URL or not settings.STRIPE_CHECKOUT_CANCEL_URL:
@@ -252,6 +289,7 @@ def create_checkout_session(db: Session, agent_id: str, *, currency: str = "usd"
         "cancel_url": settings.STRIPE_CHECKOUT_CANCEL_URL,
         "metadata": {"agent_id": agent_id},
         "subscription_data": {"metadata": {"agent_id": agent_id}},
+        "allowed_payment_method_types": list(CHECKOUT_ALLOWED_PAYMENT_METHOD_TYPES),
     }
     if settings.STRIPE_TAX_ENABLED:
         params["automatic_tax"] = {"enabled": True}
@@ -259,7 +297,11 @@ def create_checkout_session(db: Session, agent_id: str, *, currency: str = "usd"
         session = s.checkout.Session.create(**params)
     except stripe.error.StripeError as e:
         raise BillingError(f"Stripe Checkout session creation failed: {e}") from e
-    return {"checkout_url": session["url"], "session_id": session["id"]}
+    return {
+        "checkout_url": session["url"],
+        "session_id": session["id"],
+        "payment_method_types": _get(session, "payment_method_types") or [],
+    }
 
 
 def create_payment_sheet(db: Session, agent_id: str, *, currency: str = "usd") -> dict:

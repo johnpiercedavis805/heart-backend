@@ -45,7 +45,7 @@ heart-backend/
 │   ├── tests/test_identity.py  # identity + attestation (17 checks)
 │   ├── tests/test_rollover.py  # key rollover chain (27 checks)
 │   ├── tests/test_registry.py  # public identity registry (29 checks)
-│   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (92 checks)
+│   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (96 checks)
 │   ├── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
 │   ├── tests/test_secrets.py   # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
 │   └── tests/test_growth.py    # recursive self-improvement loop (37 checks)
@@ -79,7 +79,10 @@ See "Public identity registry" below.
 
 **Stripe billing — HeArt Premium** (Nov 8, test mode only; HeArt takes no
 payments yet): `POST /billing/checkout` (hosted Checkout, flat-rate
-subscription), `POST /billing/payment-sheet` (mobile Payment Sheet data),
+subscription — offers card, Cash App Pay, and PayPal where Stripe
+allows them; see `docs/payment-methods-paypal-cashapp-venmo.md` — native
+PayPal is Europe/UK-only for Stripe accounts, Venmo needs Braintree),
+`POST /billing/payment-sheet` (mobile Payment Sheet data),
 `POST /billing/portal` (self-serve Customer Portal), `GET /billing/subscription`
 (`free` when no subscription), `POST /billing/invoices` (invoice on a
 business event, auto-advance + charge automatically), `POST /billing/webhooks`
@@ -128,12 +131,12 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 386 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop
+# 1. verify everything — 390 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop
 ./.venv/bin/python api/tests/test_loop.py        # core loop (45 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
-./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (92 checks)
+./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (96 checks)
 ./.venv/bin/python api/tests/test_crypto.py      # crypto payments: USDC + Bitcoin (54 checks)
 ./.venv/bin/python api/tests/test_secrets.py     # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
 ./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (31 checks)

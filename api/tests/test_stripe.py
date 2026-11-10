@@ -204,7 +204,10 @@ def main() -> int:
         checkout_calls.append(kwargs)
         return stripe_obj(
             stripe.checkout.Session,
-            {"id": "cs_test_checkout123", "url": "https://checkout.stripe.com/c/pay/cs_test_checkout123"},
+            {"id": "cs_test_checkout123", "url": "https://checkout.stripe.com/c/pay/cs_test_checkout123",
+             # Stripe filtered "paypal" out: native PayPal is Europe/UK-only
+             # and this is a US account — the session reports what it offered.
+             "payment_method_types": ["card", "cashapp"]},
         )
 
     with mock.patch.object(stripe.checkout.Session, "create", side_effect=fake_checkout_create):
@@ -218,6 +221,13 @@ def main() -> int:
     check("checkout returns url + session id",
           body.get("checkout_url", "").startswith("https://checkout.stripe.com")
           and body.get("session_id") == "cs_test_checkout123", str(body))
+    check("checkout passes allowed_payment_method_types card+cashapp+paypal",
+          checkout_calls[0].get("allowed_payment_method_types") == ["card", "cashapp", "paypal"],
+          str(checkout_calls[0].get("allowed_payment_method_types")))
+    check("checkout does not pass removed payment_method_types (400 on API 2026-09-30+)",
+          "payment_method_types" not in checkout_calls[0])
+    check("checkout returns the payment methods Stripe actually offered",
+          body.get("payment_method_types") == ["card", "cashapp"], str(body))
     check("checkout mode=subscription", checkout_calls[0].get("mode") == "subscription")
     check("checkout flat-rate price",
           checkout_calls[0].get("line_items") == [{"price": "price_test_premium", "quantity": 1}],
@@ -246,6 +256,19 @@ def main() -> int:
     r = client.post("/billing/checkout", headers=ha)
     check("checkout 503 without price configured", r.status_code == 503, f"got {r.status_code}")
     settings.STRIPE_PRICE_PREMIUM_MONTHLY = old_price
+
+    # session without payment_method_types (older shape) -> [] not a crash
+    def fake_checkout_no_types(**kwargs):
+        return stripe_obj(
+            stripe.checkout.Session,
+            {"id": "cs_test_notypes", "url": "https://checkout.stripe.com/c/pay/cs_test_notypes"},
+        )
+
+    with mock.patch.object(stripe.checkout.Session, "create", side_effect=fake_checkout_no_types):
+        r = client.post("/billing/checkout", headers=ha)
+    check("checkout payment_method_types defaults to [] when session omits it",
+          r.status_code == 200 and r.json().get("payment_method_types") == [],
+          f"got {r.status_code} {r.text[:200]}")
 
     # ---------------------------------------------- 3. payment sheet ---
     sub_data = {
