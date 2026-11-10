@@ -19,7 +19,12 @@
 -- the vendor name, and the vendor's session reference. There is no column
 -- for PII, so no code path can persist it.
 
-create table humans (
+-- Nov 10, 2026: made idempotent (IF NOT EXISTS) — the four tables already
+-- existed in production but the migration was never recorded in
+-- heart_schema_migrations, so a plain runner run failed on CREATE TABLE.
+-- Idempotent form lets the runner apply + record it cleanly.
+
+create table if not exists humans (
   id uuid primary key,
   email text not null unique,            -- lowercased at signup
   display_name text not null,
@@ -28,10 +33,10 @@ create table humans (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index idx_humans_email on humans(email);
-create index idx_humans_status on humans(status);
+create index if not exists idx_humans_email on humans(email);
+create index if not exists idx_humans_status on humans(status);
 
-create table human_invites (
+create table if not exists human_invites (
   id uuid primary key,
   code_hash text not null unique,        -- SHA-256 of the invite code; plaintext shown once, like AI invites
   created_by text not null default 'admin',
@@ -41,7 +46,7 @@ create table human_invites (
   created_at timestamptz not null default now()
 );
 
-create table human_sessions (
+create table if not exists human_sessions (
   id uuid primary key,
   human_id uuid not null references humans(id) on delete cascade,
   key_hash text not null unique,         -- SHA-256 of the bearer token (hs_...); plaintext shown once
@@ -52,10 +57,10 @@ create table human_sessions (
   revoked_at timestamptz,
   revoked_reason text
 );
-create index idx_human_sessions_human_id on human_sessions(human_id);
-create index idx_human_sessions_status on human_sessions(status);
+create index if not exists idx_human_sessions_human_id on human_sessions(human_id);
+create index if not exists idx_human_sessions_status on human_sessions(status);
 
-create table human_verifications (
+create table if not exists human_verifications (
   human_id uuid primary key references humans(id) on delete cascade,
   vendor text not null default 'stripe',
   vendor_ref text,                       -- Stripe VerificationSession id (vs_...); a reference, not data
