@@ -653,6 +653,68 @@ def main() -> int:
     check("webhook 503 without webhook id", r.status_code == 503, f"got {r.status_code}")
     settings.PAYPAL_WEBHOOK_ID = old_wh
 
+    # ----------------- 8. paypal_create_plan.py --live guard -----------------
+    # The live plan path (--live) needs ALL THREE opt-ins at once: the
+    # flag, PAYPAL_ALLOW_LIVE_PLAN=1, and PAYPAL_TEST_MODE_ONLY=0 with
+    # PAYPAL_API_BASE on the live host. Anything less refuses BEFORE
+    # any PayPal API call. (Sandbox default path is unchanged.)
+    import paypal_create_plan as plan_script
+
+    old_test_only = settings.PAYPAL_TEST_MODE_ONLY
+    old_api_base = settings.PAYPAL_API_BASE
+    try:
+        os.environ.pop("PAYPAL_ALLOW_LIVE_PLAN", None)
+        refusal = plan_script._live_guard()
+        check("--live refused without PAYPAL_ALLOW_LIVE_PLAN=1",
+              refusal is not None and "PAYPAL_ALLOW_LIVE_PLAN" in refusal,
+              str(refusal))
+        os.environ["PAYPAL_ALLOW_LIVE_PLAN"] = "1"
+        refusal = plan_script._live_guard()
+        check("--live refused while PAYPAL_TEST_MODE_ONLY is on",
+              refusal is not None and "PAYPAL_TEST_MODE_ONLY" in refusal,
+              str(refusal))
+        settings.PAYPAL_TEST_MODE_ONLY = False
+        refusal = plan_script._live_guard()
+        check("--live refused while PAYPAL_API_BASE is the sandbox host",
+              refusal is not None and "api-m.paypal.com" in refusal,
+              str(refusal))
+        settings.PAYPAL_API_BASE = "https://api-m.paypal.com"
+        check("--live allowed with all three opt-ins",
+              plan_script._live_guard() is None)
+        # main() with --live but no opt-in env var: exit 2, no API call.
+        os.environ.pop("PAYPAL_ALLOW_LIVE_PLAN", None)
+        with mock.patch.object(sys, "argv", ["paypal_create_plan.py", "--live"]):
+            with mock.patch("app.paypal._paypal_request",
+                            side_effect=AssertionError("live guard must refuse before any API call")):
+                rc = plan_script.main()
+        check("main() --live without opt-ins exits 2 before any API call",
+              rc == 2, f"got {rc}")
+        # main() with all three opt-ins proceeds (HTTP boundary mocked
+        # — no live call is made here either).
+        os.environ["PAYPAL_ALLOW_LIVE_PLAN"] = "1"
+
+        def fake_live_plan_request(method: str, path: str, payload: dict | None = None, **kwargs):
+            if method == "GET" and path.startswith("/v1/catalogs/products"):
+                return {"products": [{"id": "PROD-LIVE1", "name": "HeArt Premium"}]}
+            if method == "GET" and path.startswith("/v1/billing/plans"):
+                return {"plans": []}
+            if method == "POST" and path == "/v1/billing/plans":
+                return {"id": "P-LIVE123", "status": "ACTIVE"}
+            raise AssertionError(f"unexpected live plan call {method} {path}")
+
+        buf = io.StringIO()
+        with mock.patch.object(sys, "argv", ["paypal_create_plan.py", "--live"]):
+            with mock.patch("app.paypal._paypal_request", side_effect=fake_live_plan_request):
+                with redirect_stdout(buf):
+                    rc = plan_script.main()
+        check("main() --live with all opt-ins creates the plan (mocked)",
+              rc == 0 and "PAYPAL_PLAN_ID=P-LIVE123" in buf.getvalue(),
+              f"rc={rc} out={buf.getvalue()!r}")
+    finally:
+        os.environ.pop("PAYPAL_ALLOW_LIVE_PLAN", None)
+        settings.PAYPAL_TEST_MODE_ONLY = old_test_only
+        settings.PAYPAL_API_BASE = old_api_base
+
     # ------------------------------------------------------------ summary ---
     fails = [r for r in results if r[0] == FAIL]
     print(f"\n{len(results) - len(fails)}/{len(results)} paypal checks passed")

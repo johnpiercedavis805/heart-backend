@@ -94,6 +94,64 @@ sandbox. Nothing here costs money; sandbox accounts are play money.
    be applied to the production Postgres first:
    `DATABASE_URL=... python scripts/apply_migrations.py --yes`.
 
+## Going live (future — needs John's yes)
+
+**Do NOT do this until John approves the live PayPal swap.** The
+sandbox setup above stays live until then. The live swap mirrors the
+sandbox steps, against the live PayPal account (the account that
+receives the money — check which PayPal account the live REST app
+belongs to before creating the plan; the sandbox app was created
+under a different Gmail than the main one).
+
+1. **Live REST app:** developer.paypal.com -> Apps & Credentials ->
+   **Live** (not Sandbox) -> Create App (name it e.g. "HeArt").
+   Copy the **live Client ID and Secret** -> `PAYPAL_CLIENT_ID`,
+   `PAYPAL_CLIENT_SECRET` in Render env vars (replacing the sandbox
+   ones — keep the sandbox pair somewhere safe for local testing).
+2. **Live product + plan:** run the same script with the `--live`
+   flag. It refuses unless ALL THREE opt-ins are present at once —
+   the flag, `PAYPAL_ALLOW_LIVE_PLAN=1`, and
+   `PAYPAL_TEST_MODE_ONLY=0` with
+   `PAYPAL_API_BASE=https://api-m.paypal.com`. Set
+   `PAYPAL_ALLOW_LIVE_PLAN=1` for this one run only, then unset it
+   (never leave it set in Render):
+   ```
+   cd ~/workspace/heart-backend/api
+   export PAYPAL_CLIENT_ID=... PAYPAL_CLIENT_SECRET=...   # LIVE app
+   export PAYPAL_API_BASE=https://api-m.paypal.com
+   export PAYPAL_TEST_MODE_ONLY=0
+   export PAYPAL_ALLOW_LIVE_PLAN=1
+   ../.venv/bin/python scripts/paypal_create_plan.py --live
+   # -> prints PAYPAL_PLAN_ID=P-... (the LIVE plan id)
+   unset PAYPAL_ALLOW_LIVE_PLAN
+   ```
+   The script creates the same $9.99/month plan (same name, same
+   billing cycles) against the live API, reusing the product/plan if
+   re-run. Set the live `PAYPAL_PLAN_ID` in Render env vars.
+3. **Live webhook:** same live app -> Webhooks -> Add Webhook. URL:
+   `https://heart-api-ifsr.onrender.com/paypal/webhooks`, same five
+   events as sandbox. Copy the live webhook id (`WH-...`) ->
+   `PAYPAL_WEBHOOK_ID` in Render env vars.
+4. **Flip the app to live PayPal:** Render env vars —
+   `PAYPAL_TEST_MODE_ONLY=0` and
+   `PAYPAL_API_BASE=https://api-m.paypal.com` (plus the live
+   `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_PLAN_ID`,
+   `PAYPAL_WEBHOOK_ID` from steps 1–3). Redeploy so the app picks
+   them up. The module's sandbox guard (`_require_sandbox`) only
+   refuses a live base while test-only mode is on — with
+   `PAYPAL_TEST_MODE_ONLY=0` it allows the live host.
+5. **Verify with a real $9.99 subscription** (needs John's yes for
+   the charge): subscribe via `POST /paypal/subscribe`, approve in
+   PayPal, check `GET /billing/subscription` -> `{"status":
+   "active", "source": "paypal"}` and the payout ledger (500c
+   platform / 499c creator held).
+
+**Rollback:** set the sandbox credentials + plan id + webhook id
+back in Render env vars and `PAYPAL_TEST_MODE_ONLY=1` (default
+`PAYPAL_API_BASE` is the sandbox host) — the app talks to sandbox
+again. The live plan stays in PayPal (harmless; it only bills buyers
+who subscribed on it).
+
 ## Sandbox end-to-end test
 
 PayPal sandbox gives you a Business account (the merchant) and a
@@ -142,8 +200,12 @@ while `PAYPAL_TEST_MODE_ONLY=1`.
   `GET /paypal/subscriptions`, `POST /paypal/webhooks`.
 - `api/app/models.py` — `PayPalSubscription` mirror table.
 - `supabase/migrations/20261110000000_heart_paypal.sql` — migration 11.
-- `api/scripts/paypal_create_plan.py` — sandbox product + plan setup.
-- `api/tests/test_paypal.py` — 48 checks, mocked HTTP boundary.
+- `api/scripts/paypal_create_plan.py` — sandbox product + plan setup;
+  `--live` creates the same $9.99/month plan against the live API,
+  guarded by `PAYPAL_ALLOW_LIVE_PLAN=1` + `PAYPAL_TEST_MODE_ONLY=0`
+  + live `PAYPAL_API_BASE` (see "Going live" above).
+- `api/tests/test_paypal.py` — 54 checks, mocked HTTP boundary
+  (incl. the `--live` guard: refuses without all three opt-ins).
 - `.env.example` — the five PayPal env vars.
 
 ## Sources (checked Nov 10, 2026)

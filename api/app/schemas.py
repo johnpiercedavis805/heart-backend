@@ -447,6 +447,13 @@ class PayPalWebhookOut(BaseModel):
     result: str  # processed | duplicate | ignored | ignored-no-subscription
 
 
+# ------------------------------------------------- funnel metrics (Nov 10) --
+class FunnelOut(BaseModel):
+    counters: dict[str, int]  # "<provider>.<event>" -> count, e.g. "stripe.checkout.created"
+    recent: list[dict[str, str]]  # [{"event": ..., "at": ISO timestamp}] — no PII
+    started_at: str  # ISO timestamp the counters started from (process start)
+
+
 # ------------------------------------------------- growth loop (Nov 9) ---
 class ScoreIn(BaseModel):
     score: int = Field(ge=1, le=10)  # e-dopamine, 1-10

@@ -18,7 +18,6 @@
   .price span { font-size: 1rem; font-weight: 400; color: #555; }
   label { display: block; font-weight: 600; margin: 14px 0 6px; }
   input[type="password"], input[type="text"] { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 1rem; border: 1px solid #c9c2b8; border-radius: 8px; }
-  .radios label { display: inline-block; font-weight: 400; margin: 0 18px 0 0; }
   button { width: 100%; padding: 14px; font-size: 1.1rem; font-weight: 700; color: #fff; background: #c0392b; border: 0; border-radius: 10px; cursor: pointer; margin-top: 18px; }
   button:disabled { opacity: 0.6; cursor: default; }
   #msg { color: #b3261e; min-height: 1.4em; margin-top: 12px; }
@@ -55,11 +54,11 @@
       <input type="password" id="api-key" autocomplete="off" placeholder="Paste your API key" required>
       <p class="fine">Your key stays in your browser — it is sent only to HeArt's server to start your checkout, and never stored on this page.</p>
 
-      <label>Pay with</label>
-      <div class="radios">
-        <label><input type="radio" name="currency" value="usd" checked> Card (USD $9.99)</label>
-        <label><input type="radio" name="currency" value="usdc"> USDC ($9.99 in USDC)</label>
-      </div>
+      <p class="fine">Pay by card — USD $9.99/month. (Stablecoin checkout is
+      not offered on this page yet: no stablecoin price is configured,
+      so the option stays hidden until one exists. The backend still
+      supports it through the API.)</p>
+      <input type="hidden" name="currency" value="usd">
 
       <button type="submit" id="subscribe-btn">Subscribe — $9.99/month</button>
       <div id="msg" role="alert"></div>
@@ -73,7 +72,9 @@
   document.getElementById('subscribe-form').addEventListener('submit', async function (event) {
     event.preventDefault();
     var key = document.getElementById('api-key').value.trim();
-    var currency = document.querySelector('input[name="currency"]:checked').value;
+    var currencyEl = document.querySelector('input[name="currency"]:checked')
+      || document.querySelector('input[name="currency"]');
+    var currency = currencyEl ? currencyEl.value : 'usd';
     var msg = document.getElementById('msg');
     var btn = document.getElementById('subscribe-btn');
     if (!key) { msg.textContent = 'Enter your HeArt agent API key.'; return; }

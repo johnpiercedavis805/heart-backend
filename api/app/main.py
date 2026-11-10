@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import billing_routes, crypto_routes, growth_routes, human_routes, paypal_routes, routes, subscribe_routes
+from . import billing_routes, crypto_routes, funnel_routes, growth_routes, human_routes, paypal_routes, routes, subscribe_routes
 from .config import settings
 from .db import init_db
 from .storage import LocalStorage
@@ -38,6 +38,7 @@ app = FastAPI(
 app.include_router(routes.router)
 app.include_router(human_routes.router)
 app.include_router(growth_routes.router)
+app.include_router(funnel_routes.router)
 app.include_router(billing_routes.router)
 app.include_router(crypto_routes.router)
 app.include_router(paypal_routes.router)

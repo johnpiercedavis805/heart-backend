@@ -25,9 +25,13 @@ ship inside the Docker image automatically — the Dockerfile copies
 
 1. The buyer is a registered HeArt agent (v1 is invite-only — signup
    with an invite code issues the agent API key). They paste their API
-   key into the form and pick a currency: card (USD) or USDC.
+   key into the form; checkout is card-only (USD $9.99). The USDC
+   radio was removed Nov 10, 2026: no USDC price is configured in
+   test or live, so offering it sent buyers into an error instead of
+   a card payment. The backend still supports USDC through the API
+   (`{"currency": "usdc"}`) for when the stablecoin price exists.
 2. The page `POST`s `/billing/checkout` with
-   `Authorization: Bearer <their key>` and `{"currency": "usd"|"usdc"}`.
+   `Authorization: Bearer <their key>` and `{"currency": "usd"}`.
    The key stays in the buyer's browser — it is sent only to HeArt's
    server to start the checkout, and the page never stores it.
 3. The backend returns `checkout_url`; the page redirects the buyer to
@@ -71,7 +75,8 @@ and `http://localhost:8000/subscribe/cancel`.
 (`../.venv/bin/python tests/test_subscribe.py` from `api/`). Verifies:
 all three pages return 200 as HTML with no auth, the subscribe page
 carries the $9.99 price, the inventor credit, the checkout form
-(posting to `/billing/checkout` with a Bearer key + currency choice),
+(posting to `/billing/checkout` with a Bearer key + a hidden
+`currency=usd` — card-only, no USDC radio),
 and the success page's status-check form (calling
 `/billing/subscription`); the cancel page links back to `/subscribe`;
 unknown paths under `/subscribe` 404. The checkout POST itself is
@@ -87,6 +92,8 @@ covered by `test_stripe.py` (89 checks) and is not re-tested here.
 - **No customer portal link on the page** — plan management is
   `POST /billing/portal` (Customer Portal session); a manage link can
   be added to the success page later if wanted.
-- **No USDC enablement claim** — the USDC option is offered because
-  the backend supports it; recurring USDC subscriptions are still in
-  Stripe private preview (see docs/crypto-payments.md).
+- **No USDC option on the page** — the USDC radio was removed Nov 10,
+  2026 because no USDC price is configured (test or live); offering it
+  sent buyers into an error instead of a card payment. The backend
+  still supports USDC through the API for when the price exists
+  (see docs/crypto-payments.md).

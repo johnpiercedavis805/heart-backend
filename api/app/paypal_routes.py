@@ -22,7 +22,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from . import paypal
+from . import funnel, paypal
 from .config import settings
 from .db import get_db
 from .ratelimit import RateLimiter
@@ -75,7 +75,7 @@ def create_subscription(
     agent, key = requester
     _check_rate_limit(key)
     try:
-        return PayPalSubscribeOut(
+        out = PayPalSubscribeOut(
             **paypal.create_paypal_subscription(
                 db,
                 agent.id,
@@ -84,7 +84,10 @@ def create_subscription(
             )
         )
     except Exception as e:
+        funnel.record("checkout.failed", provider="paypal")
         raise _paypal_error(e)
+    funnel.record("checkout.created", provider="paypal")
+    return out
 
 
 @router.get("/subscriptions", response_model=list[PayPalSubscriptionOut])
@@ -137,6 +140,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, f"webhook payload is not valid JSON: {e}"
         )
+    funnel.record("webhook.received", provider="paypal")
     try:
         result = paypal.handle_paypal_webhook(db, event)
     except Exception as e:
@@ -145,4 +149,10 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db)):
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             f"webhook handling failed (PayPal will retry): {e}",
         )
+    if result == "processed":
+        funnel.record("webhook.processed", provider="paypal")
+    elif result == "duplicate":
+        funnel.record("webhook.duplicate", provider="paypal")
+    elif result.startswith("ignored"):
+        funnel.record("webhook.ignored", provider="paypal")
     return PayPalWebhookOut(received=True, result=result)

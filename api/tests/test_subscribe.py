@@ -7,8 +7,8 @@ run with the venv python:
 Uses an isolated SQLite DB + upload dir under /tmp. Exercises:
   GET /subscribe          — 200, HTML, no auth; carries the $9.99 price,
                             the inventor credit, and the subscribe form
-                            (API-key field + currency choice, posting to
-                            POST /billing/checkout with a Bearer key)
+                            (API-key field + card-only checkout, posting
+                            to POST /billing/checkout with a Bearer key)
   GET /subscribe/success  — 200, HTML, no auth; post-payment copy, shows
                             the Stripe session id, and offers the live
                             subscription-status check (GET
@@ -71,8 +71,9 @@ def main() -> int:
     check("subscribe page has an API-key field", 'id="api-key"' in body)
     check("subscribe page posts to POST /billing/checkout",
           "/billing/checkout" in body and "Bearer" in body)
-    check("subscribe page offers card (USD) and USDC choice",
-          'value="usd"' in body and 'value="usdc"' in body)
+    check("subscribe page offers card (USD) only — no USDC radio",
+          'value="usd"' in body and 'value="usdc"' not in body)
+    check("subscribe page does not mention USDC at all", "USDC" not in body)
     check("subscribe page says v1 is invite-only", "invite-only" in body)
     check("subscribe page has a Subscribe button", "Subscribe" in body)
     check("subscribe page makes no fake-user claims",

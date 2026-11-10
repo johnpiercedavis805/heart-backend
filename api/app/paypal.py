@@ -71,7 +71,7 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.orm import Session
 
-from . import billing
+from . import billing, funnel
 from .config import settings
 from .models import InvoiceRecord, PayPalSubscription, utcnow
 
@@ -475,12 +475,16 @@ def handle_paypal_webhook(db: Session, event: dict) -> str:
     if event_id and row.paypal_event_id == event_id:
         return "duplicate"
     if etype == "BILLING.SUBSCRIPTION.ACTIVATED":
+        prev_status = row.status
         row.status = "ACTIVE"
         next_billing = (resource.get("billing_info") or {}).get("next_billing_time")
         row.current_period_end = _parse_paypal_time(next_billing)
+        funnel.record_subscription_flip(prev_status, "ACTIVE", provider="paypal")
         result = "processed"
     elif etype in ("BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.SUSPENDED", "BILLING.SUBSCRIPTION.EXPIRED"):
+        prev_status = row.status
         row.status = etype.split(".")[-1]  # CANCELLED | SUSPENDED | EXPIRED
+        funnel.record_subscription_flip(prev_status, row.status, provider="paypal")
         result = "processed"
     elif etype == "PAYMENT.SALE.COMPLETED":
         result = _on_sale_completed(db, row, resource)

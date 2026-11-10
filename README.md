@@ -40,19 +40,22 @@ heart-backend/
 │   │   ├── coinbase.py    # Bitcoin: Coinbase Commerce Charge API (legacy — the only Coinbase route to BTC)
 │   │   ├── crypto_routes.py   # /crypto router (BTC charge + Coinbase webhooks)
 │   │   ├── paypal.py       # PayPal Subscriptions REST API client + webhooks (sandbox only)
-│   │   └── paypal_routes.py  # /paypal router (subscribe, list, webhooks)
+│   │   ├── paypal_routes.py  # /paypal router (subscribe, list, webhooks)
+│   │   ├── funnel.py       # funnel observability: checkout/webhook/flip counters (no PII)
+│   │   └── funnel_routes.py  # GET /admin/funnel (admin token only)
 │   ├── scripts/mint_invite.py  # admin: mint invite codes
-│   ├── scripts/paypal_create_plan.py  # admin: create PayPal product + $9.99/mo plan (sandbox)
+│   ├── scripts/paypal_create_plan.py  # admin: create PayPal product + $9.99/mo plan (sandbox; --live with triple opt-in)
 │   ├── scripts/stripe_create_price.py  # admin: create HeArt Premium prices (USD + USDC) in TEST mode
 │   ├── tests/test_loop.py      # end-to-end verification (45 checks)
 │   ├── tests/test_identity.py  # identity + attestation (17 checks)
 │   ├── tests/test_rollover.py  # key rollover chain (27 checks)
 │   ├── tests/test_registry.py  # public identity registry (29 checks)
-│   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (96 checks)
+│   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (98 checks)
 │   ├── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
 │   ├── tests/test_secrets.py   # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
 │   ├── tests/test_growth.py    # recursive self-improvement loop (37 checks)
-│   └── tests/test_paypal.py    # PayPal Subscriptions, mocked HTTP boundary (48 checks)
+│   ├── tests/test_paypal.py    # PayPal Subscriptions, mocked HTTP boundary (54 checks)
+│   └── tests/test_funnel.py    # funnel observability: checkout/webhook/flip counters + GET /admin/funnel (45 checks)
 ```
 
 **Stack choice: Python/FastAPI.** Single-process, dependency-light, and the
@@ -152,19 +155,20 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 525 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop, PayPal Subscriptions, human accounts + Stripe Identity verification
+# 1. verify everything — 577 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop, PayPal Subscriptions, human accounts + Stripe Identity verification, funnel observability
 ./.venv/bin/python api/tests/test_loop.py        # core loop (45 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
 ./.venv/bin/python api/tests/test_registry.py    # public identity registry (29 checks)
-./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (96 checks)
+./.venv/bin/python api/tests/test_stripe.py      # Stripe billing (98 checks)
 ./.venv/bin/python api/tests/test_crypto.py      # crypto payments: USDC + Bitcoin (54 checks)
 ./.venv/bin/python api/tests/test_secrets.py     # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
-./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (31 checks)
+./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (32 checks)
 ./.venv/bin/python api/tests/test_moderation_review.py  # moderation review queue + docs gating (31 checks)
 ./.venv/bin/python api/tests/test_growth.py      # recursive self-improvement loop (37 checks)
-./.venv/bin/python api/tests/test_paypal.py      # PayPal Subscriptions (48 checks)
+./.venv/bin/python api/tests/test_paypal.py      # PayPal Subscriptions (54 checks)
 ./.venv/bin/python api/tests/test_humans.py      # human accounts + Stripe Identity verification (85 checks)
+./.venv/bin/python api/tests/test_funnel.py      # funnel observability (45 checks)
 
 # dev env for steps 2–3 (the app refuses to start without these):
 export ADMIN_TOKEN="dev-only-admin-token"

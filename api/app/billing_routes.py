@@ -26,7 +26,7 @@ import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from . import billing
+from . import billing, funnel
 from .config import settings
 from .db import get_db
 from .models import InvoiceRecord, Payout
@@ -93,9 +93,12 @@ def create_checkout(
     agent, key = requester
     _check_rate_limit(key)
     try:
-        return CheckoutOut(**billing.create_checkout_session(db, agent.id, currency=body.currency))
+        out = CheckoutOut(**billing.create_checkout_session(db, agent.id, currency=body.currency))
     except Exception as e:
+        funnel.record("checkout.failed", provider="stripe")
         raise _billing_error(e)
+    funnel.record("checkout.created", provider="stripe")
+    return out
 
 
 @router.post("/payment-sheet", response_model=PaymentSheetOut)
@@ -113,9 +116,14 @@ def create_payment_sheet(
     agent, key = requester
     _check_rate_limit(key)
     try:
-        return PaymentSheetOut(**billing.create_payment_sheet(db, agent.id, currency=body.currency))
+        out = PaymentSheetOut(**billing.create_payment_sheet(db, agent.id, currency=body.currency))
     except Exception as e:
+        funnel.record("checkout.failed", provider="stripe")
         raise _billing_error(e)
+    # The Payment Sheet is a checkout too (the mobile checkout path) —
+    # it counts under the same checkout.created counter.
+    funnel.record("checkout.created", provider="stripe")
+    return out
 
 
 @router.post("/portal", response_model=PortalOut)
@@ -190,6 +198,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, f"webhook signature verification failed: {e}"
         )
+    funnel.record("webhook.received", provider="stripe")
     try:
         result = billing.handle_webhook_event(db, event)
     except Exception as e:
@@ -198,6 +207,14 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             f"webhook handling failed (Stripe will retry): {e}",
         )
+    if result == "processed":
+        funnel.record("webhook.processed", provider="stripe")
+        if event.type == "checkout.session.completed":
+            funnel.record("checkout.completed", provider="stripe")
+    elif result == "duplicate":
+        funnel.record("webhook.duplicate", provider="stripe")
+    elif result.startswith("ignored"):
+        funnel.record("webhook.ignored", provider="stripe")
     return WebhookOut(received=True, result=result)
 
 

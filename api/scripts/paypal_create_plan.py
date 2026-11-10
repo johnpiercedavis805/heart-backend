@@ -12,6 +12,17 @@ PAYPAL_TEST_MODE_ONLY is on (the default). The plan is created once;
 re-running prints the existing plan id instead of duplicating it.
 Amount is $9.99/month, confirmed by John Nov 8 (flat rate).
 
+LIVE MODE (future live swap — needs John's yes, every time):
+`--live` creates the SAME $9.99/month plan against the live API
+(https://api-m.paypal.com), but ONLY when all three opt-ins are
+present at once — the flag, PAYPAL_ALLOW_LIVE_PLAN=1, and
+PAYPAL_TEST_MODE_ONLY=0 with PAYPAL_API_BASE set to the live host.
+Anything less refuses. Nothing here ever runs live by accident:
+without --live the script is sandbox-only, and with --live but
+without the two env vars it exits before any API call. Do NOT set
+PAYPAL_ALLOW_LIVE_PLAN=1 in Render permanently — set it for the one
+run, then remove it.
+
 What the script does (PayPal Subscriptions API):
   1. POST /v1/catalogs/products — "HeArt Premium" (SERVICE, SOFTWARE).
   2. POST /v1/billing/plans — one REGULAR monthly billing cycle,
@@ -28,6 +39,7 @@ https://heart-api-ifsr.onrender.com/paypal/webhooks with the events
 in docs/paypal-subscriptions.md, and set PAYPAL_WEBHOOK_ID.
 """
 
+import argparse
 import os
 import sys
 
@@ -50,20 +62,74 @@ PLAN_DESCRIPTION = (
 PLAN_NAME = "HeArt Premium — $9.99/month"
 
 
+def _live_guard() -> str | None:
+    """The --live gate: returns None when live plan creation is
+    allowed, else the reason it is refused. Live requires ALL of:
+      --live flag,
+      PAYPAL_ALLOW_LIVE_PLAN=1 (a one-run opt-in, never permanent),
+      PAYPAL_TEST_MODE_ONLY=0, and
+      PAYPAL_API_BASE exactly https://api-m.paypal.com.
+    Missing any one of them refuses BEFORE any PayPal API call."""
+    if os.environ.get("PAYPAL_ALLOW_LIVE_PLAN") != "1":
+        return (
+            "PAYPAL_ALLOW_LIVE_PLAN is not '1'. Live plan creation "
+            "needs the explicit one-run opt-in: export "
+            "PAYPAL_ALLOW_LIVE_PLAN=1 for this run only, then unset it."
+        )
+    if settings.PAYPAL_TEST_MODE_ONLY:
+        return (
+            "PAYPAL_TEST_MODE_ONLY is still on. Live plan creation "
+            "needs PAYPAL_TEST_MODE_ONLY=0 (set only when John "
+            "approves going live)."
+        )
+    if settings.PAYPAL_API_BASE.rstrip("/") != "https://api-m.paypal.com":
+        return (
+            f"PAYPAL_API_BASE is {settings.PAYPAL_API_BASE!r}, not the "
+            "live host https://api-m.paypal.com. Set it to the live "
+            "host for the live run."
+        )
+    return None
+
+
 def main() -> int:
-    if not settings.PAYPAL_CLIENT_ID or not settings.PAYPAL_CLIENT_SECRET:
+    parser = argparse.ArgumentParser(
+        description="Create the HeArt Premium $9.99/month plan in PayPal."
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="create the plan against the LIVE PayPal API. Requires "
+        "PAYPAL_ALLOW_LIVE_PLAN=1 AND PAYPAL_TEST_MODE_ONLY=0 AND "
+        "PAYPAL_API_BASE=https://api-m.paypal.com — refuses otherwise. "
+        "Without --live, sandbox only.",
+    )
+    args = parser.parse_args()
+    if args.live:
+        refusal = _live_guard()
+        if refusal is not None:
+            print(f"REFUSING live plan creation: {refusal}", file=sys.stderr)
+            return 2
         print(
-            "PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET are not set. Export "
-            "sandbox REST app credentials first (PayPal Developer "
+            "!!! LIVE MODE — creating a REAL $9.99/month plan in the "
+            "LIVE PayPal account. This is the plan buyers will pay on. "
+            "!!!",
+            file=sys.stderr,
+        )
+    if not settings.PAYPAL_CLIENT_ID or not settings.PAYPAL_CLIENT_SECRET:
+        which = "LIVE" if args.live else "sandbox"
+        print(
+            f"PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET are not set. Export "
+            f"the {which} REST app credentials first (PayPal Developer "
             "Dashboard -> Apps & Credentials).",
             file=sys.stderr,
         )
         return 2
-    try:
-        paypal._require_sandbox()
-    except paypal.PayPalNotConfigured as e:
-        print(f"REFUSING: {e}", file=sys.stderr)
-        return 2
+    if not args.live:
+        try:
+            paypal._require_sandbox()
+        except paypal.PayPalNotConfigured as e:
+            print(f"REFUSING: {e}", file=sys.stderr)
+            return 2
 
     # Reuse the product if it already exists (idempotent by name).
     products = paypal._paypal_request(

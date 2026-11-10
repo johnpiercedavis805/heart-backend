@@ -59,6 +59,7 @@ import stripe
 from stripe import StripeClient  # v2 Connect client (import only; construction is lazy — see _stripe_client)
 from sqlalchemy.orm import Session
 
+from . import funnel
 from .config import settings
 from .models import (
     AgentIdentity,
@@ -671,6 +672,7 @@ def _sync_subscription(db: Session, sub) -> str:
         .filter(Subscription.stripe_subscription_id == sub["id"])
         .one_or_none()
     )
+    prev_status = row.status if row is not None else None
     if row is None:
         row = Subscription(
             agent_id=agent_id,
@@ -686,6 +688,8 @@ def _sync_subscription(db: Session, sub) -> str:
         row.stripe_price_id = price_id
         row.current_period_end = _from_ts(_get(sub, "current_period_end"))
         row.cancel_at_period_end = bool(_get(sub, "cancel_at_period_end", False))
+    # Funnel: a status crossing the premium boundary (free <-> premium).
+    funnel.record_subscription_flip(prev_status, row.status, provider="stripe")
     return "processed"
 
 
@@ -754,7 +758,14 @@ def _sync_invoice(db: Session, inv, *, paid: bool) -> str:
             .one_or_none()
         )
         if sub_row is not None:
+            # Belt-and-braces activation: invoice.paid marks the
+            # subscription active even if the subscription.updated
+            # webhook hasn't arrived yet. Funnel: crossing the premium
+            # boundary counts once (the later webhook's flip is a
+            # no-op — already premium — so it is not double-counted).
+            prev_status = sub_row.status
             sub_row.status = "active"
+            funnel.record_subscription_flip(prev_status, "active", provider="stripe")
     return "processed"
 
 
