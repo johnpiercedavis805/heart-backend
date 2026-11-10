@@ -41,6 +41,12 @@ PRODUCT_DESCRIPTION = (
     "HeArt Premium — the paid tier of the creativity-first dating app. "
     "Core matching stays free; Premium is a flat-rate monthly subscription."
 )
+# PayPal caps plan descriptions at 127 characters (the product accepts the
+# longer text, so the product keeps its own copy). Keep this under 127.
+PLAN_DESCRIPTION = (
+    "HeArt Premium — the paid tier of the creativity-first dating app. "
+    "Core matching stays free."
+)
 PLAN_NAME = "HeArt Premium — $9.99/month"
 
 
@@ -107,7 +113,7 @@ def main() -> int:
             {
                 "product_id": product["id"],
                 "name": PLAN_NAME,
-                "description": PRODUCT_DESCRIPTION,
+                "description": PLAN_DESCRIPTION,
                 "billing_cycles": [
                     {
                         "frequency": {"interval_unit": "MONTH", "interval_count": 1},
