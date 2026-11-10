@@ -130,13 +130,19 @@ the sandbox re-run is still needed to verify them live:
    (`alter table ... alter column id type uuid using id::uuid`) — the
    DB layer, not the model: every other id column is uuid in Postgres.
    Existing rows survive (all ids are app-generated UUID strings).
-   Latent, same defect class, NOT fixed here: `subscriptions`,
-   `invoice_records`, `payouts` and `crypto_payments` also declare
-   `id text primary key` while their models bind `UuidString` — no
-   production flow has done a PK UPDATE/lookup on them yet (Stripe's
-   `_sync_subscription` does update an existing row by PK, so the
-   first `subscription.updated` for an existing Stripe subscription
-   would hit it). Follow-up migration recommended.
+   Latent, same defect class — FIXED Nov 10, 2026 by migration 14
+   (`supabase/migrations/20261113000000_heart_billing_uuid_ids.sql`):
+   `subscriptions`, `invoice_records`, `payouts` and
+   `crypto_payments` also declared `id text primary key` while their
+   models bind `UuidString`. Investigation found all four hold only
+   app-generated UUID ids (provider ids live in their own text
+   columns), so the fix is the same DB-layer alter, not a model
+   change. Pinned by tests in `api/tests/test_stripe.py` (the three
+   Stripe-side tables) and `api/tests/test_crypto.py`
+   (`crypto_payments`). Apply migration 14 with
+   `scripts/apply_migrations.py --yes` — run the pre-check query in
+   the migration header against the live DB first; it must return
+   zero rows.
 
 ## Going live (future — needs John's yes)
 
@@ -245,6 +251,7 @@ while `PAYPAL_TEST_MODE_ONLY=1`.
 - `api/app/models.py` — `PayPalSubscription` mirror table.
 - `supabase/migrations/20261110000000_heart_paypal.sql` — migration 11.
 - `supabase/migrations/20261112000000_heart_paypal_uuid_id.sql` — migration 13 (Nov 10, 2026): `paypal_subscriptions.id` text -> uuid. See "Nov 10, 2026 sandbox fixes" below; apply with `scripts/apply_migrations.py --yes` before the deploy that carries the fix, or subscribe + the ACTIVATED webhook keep 500ing on Postgres.
+- `supabase/migrations/20261113000000_heart_billing_uuid_ids.sql` — migration 14 (Nov 10, 2026): `subscriptions`, `invoice_records`, `payouts` and `crypto_payments` id text -> uuid (same defect class as migration 13; all four hold only app-generated UUID ids). Run the pre-check query in the migration header against the live DB before applying; apply with `scripts/apply_migrations.py --yes` before the deploy that carries the fix, or subscription.updated / invoice reconciliation / payout retry / Coinbase webhooks keep 500ing on Postgres.
 - `api/scripts/paypal_create_plan.py` — sandbox product + plan setup;
   `--live` creates the same $9.99/month plan against the live API,
   guarded by `PAYPAL_ALLOW_LIVE_PLAN=1` + `PAYPAL_TEST_MODE_ONLY=0`

@@ -23,7 +23,12 @@ Uses an isolated SQLite DB + upload dir under /tmp. Exercises:
   -> creator payouts (John's calls, Nov 8): a subscription payment
   triggers a 50/50 payout — human creators by Stripe Transfer, AI
   creators HELD in the queryable ledger (never transferred) ->
-  tax status (threshold monitoring only, no collection).
+  tax status (threshold monitoring only, no collection) ->
+  model/migration agreement (migration 14, Nov 10, 2026):
+  subscriptions, invoice_records and payouts id is uuid in both
+  the model (UuidString) and the migrations, with PK re-read/update
+  tests on the webhook and payout-retry paths that 500'd on Postgres
+  with a text id.
 
 Stripe API calls are mocked at the SDK boundary (no test key exists in
 this environment and the sandbox egress proxy breaks TLS to Stripe, so a
@@ -45,10 +50,12 @@ import hmac
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
+from pathlib import Path
 from unittest import mock
 
 # --- isolated environment, BEFORE importing the app (config reads env at import)
@@ -484,6 +491,19 @@ def main() -> int:
     r = client.get("/billing/subscription", headers=ha)
     check("subscription.updated mirror follows", r.json().get("status") == "active", r.text[:200])
 
+    # migration 14: subscription.updated mutates the loaded row and
+    # commits (UPDATE by PK) — on Postgres with a text id that 500'd.
+    # Re-read by PK in a fresh session proves the update lands.
+    from app.models import Subscription as _SubPK
+
+    db = SessionLocal()
+    _sub = db.query(_SubPK).filter(_SubPK.stripe_subscription_id == "sub_test_sheet1").one_or_none()
+    _by_pk = db.get(_SubPK, _sub.id) if _sub is not None else None
+    check("subscription row re-read by PK in a fresh session after update",
+          _by_pk is not None and _by_pk.status == "active",
+          f"status={_by_pk.status if _by_pk else None}")
+    db.close()
+
     # charge.refunded -> refund reconciled against its invoice
     charge = {"id": "ch_test_ref1", "invoice": "in_test_paid1", "amount_refunded": 999}
     payload = event_payload("evt_test_ref1", "charge.refunded", charge)
@@ -496,6 +516,17 @@ def main() -> int:
     check("charge.refunded reconciled: refunded cents + status refunded",
           row.amount_refunded_cents == 999 and row.status == "refunded",
           f"refunded={row.amount_refunded_cents} status={row.status}")
+    db.close()
+
+    # migration 14: charge.refunded mutates the invoice row and commits
+    # (UPDATE by PK) — re-read by PK in a fresh session.
+    db = SessionLocal()
+    _inv = db.query(InvoiceRecord).filter(InvoiceRecord.stripe_invoice_id == "in_test_paid1").one()
+    _inv_pk = db.get(InvoiceRecord, _inv.id)
+    check("invoice row re-read by PK in a fresh session after refund update",
+          _inv_pk is not None and _inv_pk.amount_refunded_cents == 999
+          and _inv_pk.status == "refunded",
+          f"refunded={_inv_pk.amount_refunded_cents if _inv_pk else None} status={_inv_pk.status if _inv_pk else None}")
     db.close()
 
     # credit_note.created -> credit reconciled
@@ -914,6 +945,19 @@ def main() -> int:
           len(transfer_calls) == calls_before_retry + 1,
           f"calls={len(transfer_calls)} before={calls_before_retry}")
 
+    # migration 14: the retry mutates the failed payout row and
+    # commits (UPDATE by PK) — re-read by PK in a fresh session.
+    from app.db import SessionLocal as _SL14
+    from app.models import Payout as _PO14
+
+    _db14 = _SL14()
+    _row14 = _db14.get(_PO14, retried[0]["id"])
+    check("payout row re-read by PK in a fresh session after retry",
+          _row14 is not None and _row14.status == "transferred"
+          and _row14.stripe_transfer_id is not None,
+          f"status={_row14.status if _row14 else None}")
+    _db14.close()
+
     # --- G. endpoint processes an invoice that has no payouts yet ---
     payer5 = make_agent("stripe-payer5")
     human5 = make_agent("stripe-human5")
@@ -947,6 +991,50 @@ def main() -> int:
                     json={"stripe_invoice_id": "in_does_not_exist"}, headers=hp)
     check("endpoint 404 for unknown invoice",
           r.status_code == 404, f"got {r.status_code}")
+
+    # ------------------------------------------------ 9. id text -> uuid ---
+    # Migration 14 (Nov 10, 2026): subscriptions, invoice_records and
+    # payouts declared `id text primary key` in migrations 6–7 while
+    # their models bind UuidString — the same defect class migration 13
+    # fixed for paypal_subscriptions. Postgres has no text = uuid
+    # operator, so any webhook that mutates a loaded row (the ORM's
+    # UPDATE by PK on commit) 500'd: subscription.updated, the invoice
+    # reconciliation paths, and the payout retry. SQLite hides it, so
+    # this pins the agreement statically: the migrations, applied in
+    # order, must leave each column uuid, matching the model. The PK
+    # re-read checks in sections 6 (subscription, invoice) and 8F
+    # (payout retry) replay the exact production paths by PK.
+    from app.models import InvoiceRecord as _IR9
+    from app.models import Payout as _PO9
+    from app.models import Subscription as _SUB9
+    from app.models import UuidString as _US9
+
+    for _model, _name in ((_SUB9, "Subscription"), (_IR9, "InvoiceRecord"), (_PO9, "Payout")):
+        check(f"{_name} model id binds as a real uuid (UuidString)",
+              isinstance(_model.__table__.c.id.type, _US9),
+              str(type(_model.__table__.c.id.type)))
+
+    def _final_id_type(table: str) -> str | None:
+        mig_dir = Path(__file__).resolve().parent.parent.parent / "supabase" / "migrations"
+        col_type = None
+        for f in sorted(mig_dir.glob("*.sql")):
+            text = f.read_text()
+            idx = text.find(f"create table {table}")
+            if idx != -1:
+                # only this table's CREATE TABLE block (up to "');'")
+                end = text.find(");", idx)
+                block = text[idx:end if end != -1 else len(text)]
+                m = re.search(r"\bid\s+(text|uuid)\s+primary key", block)
+                if m:
+                    col_type = m.group(1)
+            if re.search(rf"alter table {table}\s+alter column id\s+type\s+uuid\b", text):
+                col_type = "uuid"
+        return col_type
+
+    for _table in ("subscriptions", "invoice_records", "payouts"):
+        _t = _final_id_type(_table)
+        check(f"migrations leave {_table}.id as uuid (not text)",
+              _t == "uuid", f"final type={_t}")
 
     # unauthenticated billing calls are rejected
     r = client.post("/billing/checkout")
