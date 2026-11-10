@@ -387,6 +387,103 @@ class CryptoPayment(Base):
     coinbase_event_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+# ----------------- humans (HeArt human-to-human track, M1/M2, Nov 2026) ---
+# SEPARATE tables from the AI track — never a kind flag on agents. A human
+# is not an agent row with a flag; the two tracks have their own tables,
+# their own auth, and their own invite pool (see human_auth.py).
+class Human(Base):
+    """One human user. Email + Argon2id password (see human_auth.py).
+    status: pending_verification (just signed up) | active (verified 18+,
+    via the Stripe Identity webhook — see human_verification.py) |
+    suspended | banned (admin only; the suspend/ban endpoints are M8)."""
+
+    __tablename__ = "humans"
+
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)  # lowercased at signup
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Argon2id PHC string ($argon2id$v=19$m=...,t=...,p=...$salt$hash).
+    # The plaintext password is never stored, logged, or returned.
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_verification")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class HumanInvite(Base):
+    """Invite codes for the HUMAN pool — a separate pool from the AI
+    `invites` table. Same shape (hash-only storage, single use), never
+    the same rows: an AI invite code cannot sign up a human and vice
+    versa. Who mints human invites is John's call (Q2, open)."""
+
+    __tablename__ = "human_invites"
+
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False, default="admin")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    used_by_human_id: Mapped[str | None] = mapped_column(UuidString, ForeignKey("humans.id", ondelete="SET NULL"))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class HumanSession(Base):
+    """A human's login session — mirrors the ApiKey row shape exactly
+    (hash-only storage, 90-day expiry, 24h rotation grace, instant
+    revocation) in its own table. The bearer token is shown once at
+    login/signup and never again. Humans have NO signing secret: they
+    cannot client-sign works — human provenance is the verification
+    record, not a signature (see the build plan §2.1)."""
+
+    __tablename__ = "human_sessions"
+
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    human_id: Mapped[str] = mapped_column(UuidString, ForeignKey("humans.id", ondelete="CASCADE"), nullable=False, index=True)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    grace_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")  # active | rotated | revoked
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class HumanVerification(Base):
+    """The verification record for one human — and the ONLY place HeArt
+    records anything about their identity check.
+
+    THE NEVER-STORE RULE, ENFORCED BY THIS SCHEMA: there is no column
+    here for a date of birth, an ID number, a document image, a selfie,
+    a biometric template, a name from the check, or an address — so no
+    code path can persist one. Stripe holds all of that; HeArt gets a
+    yes/no, an 18+ flag, a date, and a reference (see
+    docs/human-verification-stripe-identity.md §5). The webhook payload
+    Stripe sends DOES contain verified_outputs (name, DOB, address,
+    last-4 SSN) as part of the session object — the handler reads ONLY
+    verified_outputs.dob, transiently, to compute is_18_plus, and never
+    logs the payload or writes any other field.
+
+    status: unverified | pending | verified | failed. is_18_plus is NULL
+    until a verified session supplies a DOB. A human whose identity is
+    verified but who is under 18 keeps status "verified" with
+    is_18_plus False — and NEVER becomes active (see
+    human_verification._on_verified). last_error_code is Stripe's machine
+    error code (e.g. document_unverified_other) — PII-free, so the app
+    can tell the user why to retry."""
+
+    __tablename__ = "human_verifications"
+
+    human_id: Mapped[str] = mapped_column(UuidString, ForeignKey("humans.id", ondelete="CASCADE"), primary_key=True)
+    vendor: Mapped[str] = mapped_column(String(30), nullable=False, default="stripe")
+    vendor_ref: Mapped[str | None] = mapped_column(String(100), nullable=True)  # Stripe VerificationSession id (vs_...)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="unverified")
+    is_18_plus: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 # Local mirrors of Stripe objects. Stripe is the source of truth; these
 # rows exist so the app can answer "is this agent premium?" and reconcile
 # invoices without a Stripe round-trip on every request. Webhooks keep them

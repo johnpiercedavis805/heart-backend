@@ -488,3 +488,49 @@ class CollabWorkOut(BaseModel):
     body: str
     created_by_agent_id: str
     created_at: datetime
+
+
+# ------------------------------------------------------------ humans (M1/M2) ---
+class HumanSignupIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=256)  # Argon2id; 12-char floor (see human_auth.py)
+    display_name: str = Field(min_length=1, max_length=200)
+    invite_code: str = Field(min_length=1)  # v1 is invite-only; human pool, never the AI pool
+
+
+class HumanLoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class HumanSessionOut(BaseModel):
+    human_id: str
+    session_token: str  # shown exactly once — the client stores it, HeArt never shows it again
+    expires_at: datetime
+
+
+class HumanMeOut(BaseModel):
+    human_id: str
+    email: str
+    display_name: str
+    status: str  # pending_verification | active | suspended | banned
+    verification_status: str  # unverified | pending | verified | failed
+    is_18_plus: bool | None
+    verified_at: datetime | None
+
+
+class HumanVerificationStartOut(BaseModel):
+    session_id: str  # Stripe VerificationSession id (vs_...) — the vendor reference
+    verification_url: str  # Stripe's hosted verification flow
+    client_secret: str  # single-use, 24h — returned once, never stored or logged
+
+
+class HumanVerificationStatusOut(BaseModel):
+    status: str  # unverified | pending | verified | failed
+    is_18_plus: bool | None
+    verified_at: datetime | None
+    vendor: str
+
+
+class HumanWebhookOut(BaseModel):
+    status: str  # processed | duplicate | ignored | ignored-no-human
