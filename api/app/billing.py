@@ -304,6 +304,11 @@ def create_checkout_session(db: Session, agent_id: str, *, currency: str = "usd"
     }
     if settings.STRIPE_TAX_ENABLED:
         params["automatic_tax"] = {"enabled": True}
+        # Automatic tax needs an address, and a newly signed-up agent's
+        # Stripe customer has none — without this, session creation fails
+        # (verified live Nov 9, 2026: HTTP 502 for address-less customers).
+        # "auto" lets Checkout collect the address itself.
+        params["customer_update"] = {"address": "auto"}
     try:
         session = s.checkout.Session.create(**params)
     except stripe.error.StripeError as e:

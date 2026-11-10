@@ -241,6 +241,8 @@ def main() -> int:
           checkout_calls[0].get("subscription_data", {}).get("metadata", {}).get("agent_id") == agent_id)
     check("checkout no automatic_tax while tax collection off",
           "automatic_tax" not in checkout_calls[0])
+    check("checkout no customer_update while tax collection off",
+          "customer_update" not in checkout_calls[0])
 
     # tax on -> automatic_tax is sent (collection starts before first live charge)
     settings.STRIPE_TAX_ENABLED = True
@@ -248,6 +250,8 @@ def main() -> int:
         r = client.post("/billing/checkout", headers=ha)
     check("checkout sends automatic_tax when tax enabled",
           checkout_calls[-1].get("automatic_tax") == {"enabled": True})
+    check("checkout collects address for automatic tax (address-less customers 502 without it)",
+          checkout_calls[-1].get("customer_update") == {"address": "auto"})
     settings.STRIPE_TAX_ENABLED = False
 
     # checkout without a price configured -> 503

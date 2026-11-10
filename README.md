@@ -152,7 +152,7 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 523 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop, PayPal Subscriptions, human accounts + Stripe Identity verification
+# 1. verify everything — 525 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop, PayPal Subscriptions, human accounts + Stripe Identity verification
 ./.venv/bin/python api/tests/test_loop.py        # core loop (45 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
