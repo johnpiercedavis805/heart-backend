@@ -68,10 +68,21 @@ from .models import (
     InvoiceRecord,
     Match,
     Payout,
+    PayPalSubscription,
     Subscription,
     WebhookEvent,
     utcnow,
 )
+
+# PayPal payments have no Stripe invoice: their payout rows are
+# namespaced 'paypal:<sale id>' (see app/paypal.py). The money for a
+# PayPal payment sits in HeArt's PayPal account, NOT in Stripe — so a
+# PayPal invoice must NEVER trigger a Stripe Transfer; its creator
+# shares are recorded HELD in the ledger (PayPal Payouts are a
+# follow-up, not built). Callers pass allow_transfers=False for PayPal
+# invoices (paypal.py does); the /billing/connect/payouts re-run path
+# derives it from this prefix.
+PAYPAL_INVOICE_PREFIX = "paypal:"
 
 # Mobile Payment Sheet ephemeral keys must name the API version the mobile
 # SDK speaks. Use the SDK's own pinned version so the key never drifts
@@ -414,6 +425,17 @@ def get_subscription_status(db: Session, agent_id: str) -> dict:
             "source": "coinbase",
             "premium_until": btc.premium_until.isoformat() if btc.premium_until else None,
         }
+    pp = _active_paypal_subscription(db, agent_id)
+    if pp is not None:
+        return {
+            "status": "active",
+            "stripe_subscription_id": None,
+            "stripe_price_id": pp.paypal_plan_id,
+            "current_period_end": pp.current_period_end.isoformat() if pp.current_period_end else None,
+            "cancel_at_period_end": False,
+            "source": "paypal",
+            "premium_until": pp.current_period_end.isoformat() if pp.current_period_end else None,
+        }
     if row is None:
         return {
             "status": "free",
@@ -453,6 +475,21 @@ def _active_crypto_premium(db: Session, agent_id: str) -> CryptoPayment | None:
         .first()
     )
     return row
+
+
+def _active_paypal_subscription(db: Session, agent_id: str) -> PayPalSubscription | None:
+    """The agent's ACTIVE PayPal subscription (see app/paypal.py), or
+    None. PayPal owns the recurring billing; an ACTIVE subscription is
+    premium exactly like an active Stripe one (source "paypal")."""
+    return (
+        db.query(PayPalSubscription)
+        .filter(
+            PayPalSubscription.agent_id == agent_id,
+            PayPalSubscription.status == "ACTIVE",
+        )
+        .order_by(PayPalSubscription.created_at.desc())
+        .first()
+    )
 
 
 # -------------------------------------------------------------- invoicing ---
@@ -995,13 +1032,21 @@ def _create_creator_payout(
     amount_cents: int,
     *,
     note: str | None = None,
+    allow_transfers: bool = True,
 ) -> Payout:
     """One creator's share row. Routes by Connect readiness: an
     onboarding-complete Connect account -> Stripe Transfer (human);
     anything else -> HELD in the ledger (AI creator, or a human who
     hasn't finished onboarding yet). A failed transfer is recorded on
     the row (status "failed") and never raised — the payment itself is
-    still recorded as processed."""
+    still recorded as processed.
+
+    allow_transfers=False (PayPal invoices — the money sits in HeArt's
+    PayPal account, not in Stripe): NO Stripe Transfer is ever
+    attempted, even for an onboarding-complete human creator. The share
+    is HELD with a note saying the funds are in PayPal pending PayPal
+    Payouts — the transfer step would draw on the Stripe balance for
+    money Stripe never received."""
     if creator_agent_id is None:
         row = Payout(
             stripe_invoice_id=invoice.stripe_invoice_id,
@@ -1020,6 +1065,25 @@ def _create_creator_payout(
         db.add(row)
         return row
     serial = _creator_serial(db, creator_agent_id)
+    if not allow_transfers:
+        # Non-Stripe rail (PayPal): the money is not in Stripe, so no
+        # transfer is attempted. Held for later payout via that rail.
+        row = Payout(
+            stripe_invoice_id=invoice.stripe_invoice_id,
+            stripe_subscription_id=invoice.stripe_subscription_id,
+            payer_agent_id=invoice.agent_id,
+            creator_agent_id=creator_agent_id,
+            creator_serial=serial,
+            kind="creator",
+            creator_kind="human" if _transfer_ready_account(db, creator_agent_id) is not None else "ai",
+            amount_cents=amount_cents,
+            currency=invoice.currency or "usd",
+            status="held",
+            stripe_transfer_id=None,
+            note=note or "held — funds are in PayPal; PayPal Payouts not built yet",
+        )
+        db.add(row)
+        return row
     if _transfer_ready_account(db, creator_agent_id) is None:
         # AI creator (v1 is AI-only; an AI cannot complete Connect
         # onboarding, so it has no bank-backed account) — or a human who
@@ -1085,17 +1149,23 @@ def _create_creator_payout(
     return row
 
 
-def _retry_payout_rows(db: Session, rows: list[Payout]) -> None:
+def _retry_payout_rows(db: Session, rows: list[Payout], *, allow_transfers: bool = True) -> None:
     """Re-process existing payout rows (POST /billing/connect/payouts
     re-run): retry "failed" rows, and release "held" rows whose creator
     has since finished Connect onboarding. Rows already "transferred"
     or "retained" are untouched. A retry that fails again stays
-    "failed" with the new error — nothing here raises."""
+    "failed" with the new error — nothing here raises.
+
+    allow_transfers=False (PayPal invoices): held rows stay held — the
+    money is not in Stripe, so no release to a Stripe Transfer is
+    attempted on re-processing either."""
     for row in rows:
         if row.kind != "creator" or row.creator_agent_id is None:
             continue
         if row.status not in ("failed", "held"):
             continue
+        if not allow_transfers:
+            continue  # non-Stripe rail; the share stays held
         if _transfer_ready_account(db, row.creator_agent_id) is None:
             continue  # still cannot be paid by transfer; stays held/failed
         try:
@@ -1116,16 +1186,24 @@ def _retry_payout_rows(db: Session, rows: list[Payout]) -> None:
         row.note = None
 
 
-def process_payouts_for_invoice(db: Session, invoice: InvoiceRecord) -> list[Payout]:
+def process_payouts_for_invoice(
+    db: Session, invoice: InvoiceRecord, *, allow_transfers: bool = True
+) -> list[Payout]:
     """Create (or re-process) the 50/50 payout records for one PAID
-    invoice. Called from the invoice.paid webhook and from POST
-    /billing/connect/payouts (the ops re-run path).
+    invoice. Called from the invoice.paid webhook, from POST
+    /billing/connect/payouts (the ops re-run path), and from the
+    non-Stripe rails (Coinbase, PayPal) via their synthetic invoices.
 
     Idempotent: an invoice that already has payout rows returns them —
     re-processing never duplicates a row. It DOES retry "failed" rows
     and release "held" rows whose creator has since finished Connect
     onboarding. A transfer failure is recorded on the row and never
     raised, so the webhook still returns "processed" for the payment.
+
+    allow_transfers=False (PayPal invoices — the money sits in PayPal,
+    not Stripe): creator shares are recorded HELD, never transferred.
+    Callers that know the rail pass it explicitly; the default (True)
+    preserves the Stripe and Coinbase behaviour.
 
     Returns the payout rows for the invoice (platform row included),
     oldest first. An invoice with nothing paid returns []."""
@@ -1139,7 +1217,7 @@ def process_payouts_for_invoice(db: Session, invoice: InvoiceRecord) -> list[Pay
         .all()
     )
     if existing:
-        _retry_payout_rows(db, existing)
+        _retry_payout_rows(db, existing, allow_transfers=allow_transfers)
         db.commit()
         return existing
     creator_half = total // 2  # floor; the odd cent stays with HeArt
@@ -1174,6 +1252,7 @@ def process_payouts_for_invoice(db: Session, invoice: InvoiceRecord) -> list[Pay
                 None,
                 creator_half,
                 note="unattributed — subscriber has no matches yet; held for later attribution",
+                allow_transfers=allow_transfers,
             )
         )
     else:
@@ -1181,7 +1260,11 @@ def process_payouts_for_invoice(db: Session, invoice: InvoiceRecord) -> list[Pay
         leftover = creator_half - per_creator * len(creators)
         platform_row.amount_cents += leftover
         for creator_id in creators:
-            rows.append(_create_creator_payout(db, invoice, creator_id, per_creator))
+            rows.append(
+                _create_creator_payout(
+                    db, invoice, creator_id, per_creator, allow_transfers=allow_transfers
+                )
+            )
     db.commit()
     return rows
 

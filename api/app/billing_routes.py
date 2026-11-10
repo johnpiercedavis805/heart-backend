@@ -303,7 +303,15 @@ def connect_payouts(
         > 0
     )
     try:
-        rows = billing.process_payouts_for_invoice(db, invoice)
+        # PayPal invoices (id 'paypal:<sale id>') hold their money in
+        # PayPal, not Stripe — their creator shares stay HELD, never a
+        # Stripe Transfer. Stripe and Coinbase invoices transfer.
+        allow_transfers = not body.stripe_invoice_id.startswith(
+            billing.PAYPAL_INVOICE_PREFIX
+        )
+        rows = billing.process_payouts_for_invoice(
+            db, invoice, allow_transfers=allow_transfers
+        )
     except Exception as e:
         raise _billing_error(e)
     return PayoutProcessOut(

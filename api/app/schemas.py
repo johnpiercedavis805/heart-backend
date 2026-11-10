@@ -293,10 +293,10 @@ class PortalOut(BaseModel):
 class SubscriptionOut(BaseModel):
     status: str  # "free" (no subscription) or Stripe status: active, past_due, ...
     stripe_subscription_id: str | None
-    stripe_price_id: str | None
+    stripe_price_id: str | None  # Stripe price id, or the PayPal plan id when source is "paypal"
     current_period_end: str | None
     cancel_at_period_end: bool
-    source: str = "stripe"  # "stripe" (card/USDC subscription) or "coinbase" (BTC purchase — no Stripe subscription)
+    source: str = "stripe"  # "stripe" (card/USDC subscription), "coinbase" (BTC purchase — no Stripe subscription), or "paypal" (PayPal subscription — no Stripe subscription)
     premium_until: str | None = None  # end of the current premium window (BTC: 30 days from confirmation)
 
 
@@ -416,6 +416,35 @@ class CryptoPaymentOut(BaseModel):
 class CoinbaseWebhookOut(BaseModel):
     received: bool
     result: str  # processed | duplicate | ignored | ignored-no-charge
+
+
+# --------------------------------- PayPal subscriptions (Nov 9, 2026) ------
+class PayPalSubscribeIn(BaseModel):
+    return_url: str | None = None  # where PayPal sends the buyer after approval (defaults to the subscribe success page)
+    cancel_url: str | None = None  # where PayPal sends the buyer if they bail (defaults to the subscribe cancel page)
+
+
+class PayPalSubscribeOut(BaseModel):
+    subscription_id: str | None
+    approval_url: str | None  # PayPal-hosted approval page — None when the agent is already ACTIVE on PayPal
+    status: str  # APPROVAL_PENDING | ACTIVE (PayPal status)
+    plan_id: str
+    already_active: bool  # True when the agent was already premium on PayPal (no new subscription created)
+
+
+class PayPalSubscriptionOut(BaseModel):
+    id: str
+    agent_id: str
+    paypal_subscription_id: str
+    paypal_plan_id: str
+    status: str  # APPROVAL_PENDING | APPROVED | ACTIVE | SUSPENDED | CANCELLED | EXPIRED
+    current_period_end: str | None  # next billing time from PayPal; None until activated
+    created_at: str | None
+
+
+class PayPalWebhookOut(BaseModel):
+    received: bool
+    result: str  # processed | duplicate | ignored | ignored-no-subscription
 
 
 # ------------------------------------------------- growth loop (Nov 9) ---

@@ -78,7 +78,25 @@ it for this account, it appears automatically; until then Stripe
 silently filters it out and checkout is unaffected. The session's
 returned `payment_method_types` is the proof of which case holds.
 
-### PayPal paths for a US account (NOT built — decision needed)
+### PayPal paths for a US account (BUILT Nov 10, 2026 — see docs/paypal-subscriptions.md)
+
+John's call (Nov 9, 2026): cards + PayPal is enough. The build chose
+**option 2 below — PayPal's own Subscriptions REST API** (path (1) in
+the task): it is GA and purpose-built for recurring billing, has a
+real sandbox, and its webhooks cover the full lifecycle. The Stripe
+custom-payment-method route was rejected for subscriptions: classic
+custom payment methods do not support subscription mode, and the
+orchestration preview that does is a preview integration with its own
+adapter. Built: `api/app/paypal.py` + `api/app/paypal_routes.py`,
+migration 11 (`paypal_subscriptions`), `api/scripts/paypal_create_plan.py`,
+48 checks in `api/tests/test_paypal.py`. Each completed sale mirrors
+into the 50/50 payout ledger (platform 500c retained, creator 499c
+HELD — never a Stripe Transfer, the money is in PayPal). No PayPal
+Payouts (follow-up). Setup: sandbox REST app credentials, plan script,
+webhook -> Render env vars (`PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`,
+`PAYPAL_PLAN_ID`, `PAYPAL_WEBHOOK_ID`).
+
+The options as they stood before the build:
 
 1. **Stripe custom payment method** (Stripe's own fallback for
    non-European accounts): define "PayPal" as a custom payment
@@ -91,12 +109,13 @@ returned `payment_method_types` is the proof of which case holds.
    integration with its own adapter URL and signing secret — a real
    build, not a toggle). And because the money moves outside Stripe,
    the invoice.paid → 50/50 split flow would need a parallel
-   reconciliation path. Do not start this without John's yes.
+   reconciliation path. REJECTED for subscriptions (see above).
 2. **Separate PayPal Subscriptions integration** (PayPal's own
    Subscriptions API + a PayPal Business account): PayPal handles
    the subscription and billing agreements; HeArt would mirror each
    PayPal payment into its own payout ledger for the 50/50 split.
    Also a real build, and a second billing system to maintain.
+   **BUILT Nov 10, 2026** (see docs/paypal-subscriptions.md).
 3. **Dashboard check first (2 minutes, test mode):** Stripe
    Dashboard → test mode → Settings → Payment methods → look for
    PayPal. If it is listed with an Enable toggle, native PayPal IS

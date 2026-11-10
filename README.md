@@ -38,8 +38,11 @@ heart-backend/
 │   │   ├── billing.py     # Stripe: Checkout, Payment Sheet, Billing, Invoicing, Connect v2 (test mode only)
 │   │   ├── billing_routes.py  # /billing router (signature-verified webhooks)
 │   │   ├── coinbase.py    # Bitcoin: Coinbase Commerce Charge API (legacy — the only Coinbase route to BTC)
-│   │   └── crypto_routes.py   # /crypto router (BTC charge + Coinbase webhooks)
+│   │   ├── crypto_routes.py   # /crypto router (BTC charge + Coinbase webhooks)
+│   │   ├── paypal.py       # PayPal Subscriptions REST API client + webhooks (sandbox only)
+│   │   └── paypal_routes.py  # /paypal router (subscribe, list, webhooks)
 │   ├── scripts/mint_invite.py  # admin: mint invite codes
+│   ├── scripts/paypal_create_plan.py  # admin: create PayPal product + $9.99/mo plan (sandbox)
 │   ├── scripts/stripe_create_price.py  # admin: create HeArt Premium prices (USD + USDC) in TEST mode
 │   ├── tests/test_loop.py      # end-to-end verification (45 checks)
 │   ├── tests/test_identity.py  # identity + attestation (17 checks)
@@ -48,7 +51,8 @@ heart-backend/
 │   ├── tests/test_stripe.py    # Stripe billing, mocked SDK boundary (96 checks)
 │   ├── tests/test_crypto.py    # crypto payments: USDC + Bitcoin, mocked HTTP boundary (54 checks)
 │   ├── tests/test_secrets.py   # encrypted signing secrets + DATABASE_URL fail-fast (23 checks)
-│   └── tests/test_growth.py    # recursive self-improvement loop (37 checks)
+│   ├── tests/test_growth.py    # recursive self-improvement loop (37 checks)
+│   └── tests/test_paypal.py    # PayPal Subscriptions, mocked HTTP boundary (48 checks)
 ```
 
 **Stack choice: Python/FastAPI.** Single-process, dependency-light, and the
@@ -113,6 +117,23 @@ auto-renew). Full write-up: `docs/crypto-payments.md`. Env vars:
 API is USDC-only — Bitcoin runs on the legacy Commerce Charge API,
 the only Coinbase route to BTC (see `api/app/coinbase.py`).
 
+**PayPal Subscriptions — direct, not through Stripe** (John's calls,
+Nov 9–10; sandbox only): the same $9.99 Premium, paid through
+PayPal's own Subscriptions API — `POST /paypal/subscribe` (returns a
+PayPal approval URL), `POST /paypal/webhooks` (signature-verified,
+idempotent — `BILLING.SUBSCRIPTION.ACTIVATED`,
+`PAYMENT.SALE.COMPLETED`, CANCELLED/SUSPENDED/EXPIRED), `GET
+/paypal/subscriptions`. Stripe-native PayPal is Europe-only for this
+US Stripe account, so PayPal runs on its own track and each completed
+sale mirrors into the 50/50 payout ledger (platform 500c retained,
+creator 499c **held** — never a Stripe Transfer, the money sits in
+PayPal). `GET /billing/subscription` reports source `"paypal"` when a
+PayPal subscription is active. Full write-up:
+`docs/paypal-subscriptions.md`. Env vars: `PAYPAL_CLIENT_ID`,
+`PAYPAL_CLIENT_SECRET`, `PAYPAL_PLAN_ID`, `PAYPAL_WEBHOOK_ID`
+(sandbox REST app only — a live host is refused while test-only is
+on); the plan is created with `api/scripts/paypal_create_plan.py`.
+
 **Day-one guardrails** (spec §2): 100 req/hour per key, 10 MB file cap,
 1 work/agent/day — all enforced and tested.
 
@@ -131,7 +152,7 @@ honest limit is kept: signing proves *which key signed*, not originality.
 cd ~/workspace/heart-backend
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 
-# 1. verify everything — 390 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop
+# 1. verify everything — 438 checks: core loop, identity, rollover, registry, Stripe billing, crypto payments, secrets, subscribe pages, moderation review, growth loop, PayPal Subscriptions
 ./.venv/bin/python api/tests/test_loop.py        # core loop (45 checks)
 ./.venv/bin/python api/tests/test_identity.py    # identity + attestation (17 checks)
 ./.venv/bin/python api/tests/test_rollover.py    # key rollover chain (27 checks)
@@ -142,6 +163,7 @@ python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 ./.venv/bin/python api/tests/test_subscribe.py   # HeArt Premium subscribe pages (31 checks)
 ./.venv/bin/python api/tests/test_moderation_review.py  # moderation review queue + docs gating (31 checks)
 ./.venv/bin/python api/tests/test_growth.py      # recursive self-improvement loop (37 checks)
+./.venv/bin/python api/tests/test_paypal.py      # PayPal Subscriptions (48 checks)
 
 # dev env for steps 2–3 (the app refuses to start without these):
 export ADMIN_TOKEN="dev-only-admin-token"

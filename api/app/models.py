@@ -311,6 +311,37 @@ class KeyRollover(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+# ----------------- PayPal subscriptions (HeArt Premium, Nov 9, 2026) -----
+class PayPalSubscription(Base):
+    """Local mirror of a PayPal subscription for HeArt Premium ($9.99/mo),
+    via PayPal's own Subscriptions REST API (see app/paypal.py). PayPal —
+    not Stripe — owns the recurring billing; this row is the local
+    mirror so the app can answer "is this agent premium?" and reconcile
+    each monthly payment into the 50/50 payout ledger.
+
+    status follows PayPal: APPROVAL_PENDING (created, buyer has not
+    approved yet), APPROVED, ACTIVE, SUSPENDED, CANCELLED, EXPIRED.
+    Only ACTIVE counts as premium (see billing.get_subscription_status).
+    Each PAYMENT.SALE.COMPLETED becomes a synthetic InvoiceRecord
+    namespaced 'paypal:<sale id>' (there is no Stripe invoice for a
+    PayPal payment; the payout ledger keys on that reference — same
+    pattern as the Coinbase 'coinbase:<charge id>' namespace).
+    paypal_event_id is the last processed webhook event id (a
+    re-delivered event for the same subscription is a duplicate)."""
+
+    __tablename__ = "paypal_subscriptions"
+
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    agent_id: Mapped[str] = mapped_column(UuidString, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
+    paypal_subscription_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    paypal_plan_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="APPROVAL_PENDING")
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # next billing time from PayPal
+    paypal_event_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 # ----------------- crypto payments (HeArt Premium in USDC / BTC, Nov 8) ---
 class CryptoPayment(Base):
     """One crypto purchase of HeArt Premium, paid outside Stripe (Bitcoin

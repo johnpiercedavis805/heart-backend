@@ -110,6 +110,28 @@ class Settings:
     STRIPE_TAX_ENABLED: bool = os.environ.get("STRIPE_TAX_ENABLED", "0") not in ("0", "false", "False")
     STRIPE_TEST_MODE_ONLY: bool = os.environ.get("STRIPE_TEST_MODE_ONLY", "1") not in ("0", "false", "False")
 
+    # ---- PayPal Subscriptions (HeArt Premium, $9.99/month — Nov 9, 2026)
+    # Direct PayPal Subscriptions REST API (NOT Stripe-native PayPal —
+    # Stripe's native PayPal is Europe-only and this is a US account; see
+    # docs/payment-methods-paypal-cashapp-venmo.md). PayPal handles the
+    # recurring billing; HeArt mirrors each payment into its own payout
+    # ledger for the 50/50 split (see app/paypal.py).
+    # SANDBOX ONLY by default: PAYPAL_API_BASE must stay on the sandbox
+    # host while PAYPAL_TEST_MODE_ONLY is on — the module refuses a live
+    # base (api-m.paypal.com) in test-only mode. Keys live in env vars —
+    # never in the repo, never in chat. The plan id comes from
+    # api/scripts/paypal_create_plan.py (sandbox product + $9.99/mo plan).
+    PAYPAL_CLIENT_ID: str = os.environ.get("PAYPAL_CLIENT_ID", "")
+    PAYPAL_CLIENT_SECRET: str = os.environ.get("PAYPAL_CLIENT_SECRET", "")
+    # The webhook id from the PayPal Developer Dashboard (Apps &
+    # Credentials -> your app -> Webhooks) — needed to verify webhook
+    # signatures via PayPal's verify-webhook-signature endpoint.
+    PAYPAL_WEBHOOK_ID: str = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+    # The $9.99/month billing plan id (P-...) for HeArt Premium.
+    PAYPAL_PLAN_ID: str = os.environ.get("PAYPAL_PLAN_ID", "")
+    PAYPAL_API_BASE: str = os.environ.get("PAYPAL_API_BASE", "https://api-m.sandbox.paypal.com")
+    PAYPAL_TEST_MODE_ONLY: bool = os.environ.get("PAYPAL_TEST_MODE_ONLY", "1") not in ("0", "false", "False")
+
     # ---- Coinbase (Bitcoin) — HeArt Premium paid in BTC (Nov 8, 2026)
     # Keys live in env vars — never in the repo, never in chat. There is
     # NO sandbox for the Commerce Charge API (see app/coinbase.py): the
