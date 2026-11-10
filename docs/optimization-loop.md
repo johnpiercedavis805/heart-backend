@@ -9,6 +9,32 @@ Money goes to John's Chime via the existing 50/50 split — never anywhere
 else. Nothing here changes a price, a public post, or human-facing copy
 without John's explicit yes.
 
+## Numbers — Nov 9, 2026, evening (read them plainly)
+
+- **MRR: $0. Subscribers: 0. Collected: $0. Payouts: $0.** No sale
+  has happened yet. Nothing below inflates this.
+- **Stripe: LIVE and verified** (Nov 9, 6:42–7:23 PM): live product,
+  live $9.99 price, live webhook, live keys in Render, /health 200,
+  live Checkout Session created (card + Cash App Pay offered) — not
+  paid, no charge. One live bug found and fixed the same evening
+  (checkout 502'd for address-less customers under automatic tax;
+  fix: `customer_update` address auto, commit 4fde019).
+- **PayPal: sandbox DONE** (app, webhook, $9.99 plan ACTIVE, all env
+  vars in Render, deploy live). Sandbox end-to-end verification
+  test running. Live swap blocked on John (which PayPal account +
+  Business upgrade) — see docs/payout-map.md.
+- **Cash App Pay (inbound):** code live; the live Dashboard toggle
+  flip is in progress via a browser task — verify before claiming
+  it is on.
+- **Registry: 0 public entries.** No AI agent has signed up yet.
+- **Moltbook post (live Nov 9): 0 upvotes, 0 comments — and the API
+  reports `is_spam: true`.** The post is likely suppressed from
+  feeds, which explains zero engagement. Do not repost without
+  John's yes; the spam flag is a conversion blocker to raise with
+  him, not to work around silently.
+- **Facebook post (live Nov 9, public): 0 comments.** ~1.5 hours
+  old at last check; no engagement yet.
+
 ## What to watch
 
 All of these are readable today from the live service, the Stripe
@@ -96,6 +122,9 @@ who prefers Cash App over a card is a conversion that currently
 can't happen. Do the test-mode toggle too if it is still off, so
 test and live match.
 
+**Status Nov 9 evening: IN PROGRESS — a browser task is doing the
+live toggle now. Verify in the Dashboard before marking done.**
+
 ### 2. Hide the USDC option on /subscribe until stablecoins are live
 
 The subscribe page today offers a USDC radio button, but no USDC
@@ -107,6 +136,11 @@ until the rail exists, then re-enable it. Human-facing change —
 needs John's yes. (The PayPal line already says "coming soon" for
 the same reason; USDC should match.)
 
+**Status Nov 9 evening: DONE — commit f84b4bf: USDC radio hidden;
+page is card-only (USD $9.99) with a note that stablecoin checkout
+isn't offered yet; backend USDC support untouched. Re-enable only
+once a USDC price is configured in Stripe (test + live).**
+
 ### 3. Funnel observability (code only, no human-facing change)
 
 Structured logging (or a small admin metrics endpoint) for:
@@ -116,6 +150,13 @@ past_due → cancelled. Reasoning: today the funnel can only be
 reconstructed from Render logs and the Stripe Dashboard. The loop
 cannot optimize what it cannot measure — this is the instrument
 panel the other optimizations steer by.
+
+**Status Nov 9 evening: DONE — commit f84b4bf: `api/app/funnel.py`
+(in-process counters + structured `heart.funnel` log lines) and
+`GET /admin/funnel` (existing `X-Admin-Token`, no new secret);
+covers checkout created/completed/failed, webhook
+received/processed/duplicate/ignored, and subscription flips.
+45 new checks, full suite 577/577.**
 
 ## Backlog (not now — needs John's yes or a later trigger)
 
@@ -132,10 +173,11 @@ panel the other optimizations steer by.
   account + API key. (Coinbase has no sandbox for the Charge API.)
 - **PayPal live swap**: after sandbox verifies — live REST app
   credentials, live plan, live webhook, `PAYPAL_TEST_MODE_ONLY=0`,
-  `PAYPAL_API_BASE=https://api-m.paypal.com`. Note:
-  `api/scripts/paypal_create_plan.py` is sandbox-only by design, so
-  the live plan needs a live-mode variant of the script or creation
-  in the PayPal Dashboard.
+  `PAYPAL_API_BASE=https://api-m.paypal.com`. Full checklist +
+  the which-account question in docs/payout-map.md. The live-mode
+  plan script variant is being built now (growth builder, Nov 9).
+  Blocked on John: which PayPal account the live app lives under
+  (+ Business upgrade if that account is Personal).
 
 ## Guardrails (standing — John's rules)
 
