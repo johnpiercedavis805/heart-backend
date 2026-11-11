@@ -79,6 +79,76 @@ def main() -> int:
     check("subscribe page makes no fake-user claims",
           "testimonial" not in body.lower() and "loved by" not in body.lower())
 
+    # ---------------------------------------------------------- landing page ---
+    r = client.get("/")
+    check("GET / -> 200", r.status_code == 200, f"got {r.status_code}")
+    check("GET / is HTML",
+          "text/html" in r.headers.get("content-type", ""), r.headers.get("content-type", ""))
+    body = r.text
+    check("landing page H1 is exact", "HeArt — soul first, face later." in body)
+    check("landing page sub names the inventor",
+          "A dating app where you match on the art and music you made — before you ever see a picture or read a bio. Invented by John Davis." in body)
+    check("landing page step 1",
+          "1. Make something — a song, a drawing, a poem." in body)
+    check("landing page step 2",
+          "2. Match on the work, not the face." in body)
+    check("landing page step 3",
+          "3. The face comes later, only when you both say so." in body)
+    check("landing page has Request an invite button",
+          "Request an invite" in body and 'href="/subscribe"' in body)
+    check("landing page has Subscribe button",
+          "Subscribe — $9.99/month" in body)
+    check("landing page footer on disclosed AI",
+          "AIs can join too — but they have to say they're AI. Every AI gets a verifiable serial identity." in body)
+
+    # ------------------------------------------- subscribe SEO + invite section ---
+    r = client.get("/subscribe")
+    body = r.text
+    check("subscribe page has meta description",
+          'name="description"' in body
+          and "HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. $9.99/month, invite-only." in body)
+    check("subscribe page has OG title",
+          'property="og:title"' in body and "HeArt — soul first, face later." in body)
+    check("subscribe page has OG description",
+          'property="og:description"' in body
+          and "HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. $9.99/month, invite-only." in body)
+    check("subscribe page has how-it-works strip",
+          "You make something. Someone resonates with it. You match — and only then do the faces come out." in body)
+    check("subscribe page has invite section H2",
+          "Don't have an invite yet?" in body)
+    check("subscribe page invite body copy",
+          "HeArt v1 is invite-only while we test it. Leave your email and we'll send you an invite code when a spot opens. No spam — one email, one invite." in body)
+    check("subscribe page has invite email field + button",
+          'id="invite-email"' in body and "Request an invite" in body)
+    check("subscribe page invite form posts to /invite-request",
+          "/invite-request" in body)
+
+    # ------------------------------------------------------- invite endpoint ---
+    import sqlite3
+
+    def invite_row_count() -> int:
+        con = sqlite3.connect(f"{TMP}/test.db")
+        try:
+            return con.execute("select count(*) from invite_requests").fetchone()[0]
+        finally:
+            con.close()
+
+    r = client.post("/invite-request", json={"email": "Fan@Example.com"})
+    check("POST /invite-request valid email -> 200", r.status_code == 200, f"got {r.status_code}: {r.text[:200]}")
+    check("POST /invite-request returns ok + confirmation",
+          r.json().get("ok") is True and "on the list" in r.json().get("message", ""))
+    check("invite email stored (1 row)", invite_row_count() == 1, f"got {invite_row_count()}")
+    con = sqlite3.connect(f"{TMP}/test.db")
+    stored = con.execute("select email from invite_requests").fetchone()[0]
+    con.close()
+    check("stored email is lowercased", stored == "fan@example.com", f"got {stored}")
+    r = client.post("/invite-request", json={"email": "fan@example.com"})
+    check("POST /invite-request duplicate -> still 200", r.status_code == 200, f"got {r.status_code}")
+    check("duplicate invite is a no-op (still 1 row)", invite_row_count() == 1, f"got {invite_row_count()}")
+    r = client.post("/invite-request", json={"email": "not-an-email"})
+    check("POST /invite-request bad email -> 422", r.status_code == 422, f"got {r.status_code}")
+    check("bad email stores nothing (still 1 row)", invite_row_count() == 1, f"got {invite_row_count()}")
+
     # --------------------------------------------------------- success page ---
     r = client.get("/subscribe/success?session_id=cs_test_abc123")
     check("GET /subscribe/success -> 200", r.status_code == 200, f"got {r.status_code}")

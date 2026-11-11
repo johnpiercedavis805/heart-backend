@@ -621,3 +621,18 @@ class Payout(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class InviteRequest(Base):
+    """Someone asking for a HeArt v1 invite code (landing page, Nov 10 2026).
+
+    Email-only capture — NO email is sent yet; the row just waits until a
+    spot opens and an invite code is issued to it by hand. Email is stored
+    lowercased and unique so a repeat request is a no-op, not a second row.
+    """
+
+    __tablename__ = "invite_requests"
+
+    id: Mapped[str] = mapped_column(UuidString, primary_key=True, default=new_uuid)
+    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HeArt Premium — Subscribe — $9.99/month</title>
+<meta name="description" content="HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. $9.99/month, invite-only.">
+<meta property="og:title" content="HeArt — soul first, face later.">
+<meta property="og:description" content="HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. $9.99/month, invite-only.">
+<meta property="og:type" content="website">
 <style>
   body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; color: #1c1c1e; background: #faf7f2; }
   main { max-width: 640px; margin: 0 auto; padding: 48px 20px 64px; }
@@ -17,10 +21,12 @@
   .price { font-size: 2rem; font-weight: 700; }
   .price span { font-size: 1rem; font-weight: 400; color: #555; }
   label { display: block; font-weight: 600; margin: 14px 0 6px; }
-  input[type="password"], input[type="text"] { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 1rem; border: 1px solid #c9c2b8; border-radius: 8px; }
+  input[type="password"], input[type="text"], input[type="email"] { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 1rem; border: 1px solid #c9c2b8; border-radius: 8px; }
   button { width: 100%; padding: 14px; font-size: 1.1rem; font-weight: 700; color: #fff; background: #c0392b; border: 0; border-radius: 10px; cursor: pointer; margin-top: 18px; }
   button:disabled { opacity: 0.6; cursor: default; }
   #msg { color: #b3261e; min-height: 1.4em; margin-top: 12px; }
+  #invite-msg { color: #1e7b34; min-height: 1.4em; margin-top: 12px; }
+  .how { font-size: 1.05rem; color: #333; margin: 0 0 28px; line-height: 1.55; }
   .fine { font-size: 0.9rem; color: #666; }
   .inventor { font-size: 0.9rem; color: #666; text-align: center; margin-top: 28px; }
   ul { margin: 0 0 12px; padding-left: 20px; line-height: 1.55; }
@@ -30,6 +36,7 @@
 <main>
   <h1><span class="heart">♥</span> HeArt Premium</h1>
   <p class="tagline">Match on the art and music you create — before ever seeing pics or bios. Soul first, face later.</p>
+  <p class="how">You make something. Someone resonates with it. You match — and only then do the faces come out.</p>
 
   <section>
     <h2>What HeArt is</h2>
@@ -45,6 +52,17 @@
       <li><strong>50/50 creator split</strong> — half of your payment goes to the creators you matched with.</li>
       <li><strong>Cancel anytime</strong> from your account — no lock-in, no hidden fees.</li>
     </ul>
+  </section>
+
+  <section>
+    <h2>Don't have an invite yet?</h2>
+    <p>HeArt v1 is invite-only while we test it. Leave your email and we'll send you an invite code when a spot opens. No spam — one email, one invite.</p>
+    <form id="invite-form">
+      <label for="invite-email">Your email</label>
+      <input type="email" id="invite-email" autocomplete="email" placeholder="you@example.com" required>
+      <button type="submit" id="invite-btn">Request an invite</button>
+      <div id="invite-msg" role="status"></div>
+    </form>
   </section>
 
   <section>
@@ -69,6 +87,40 @@
   <p class="inventor">HeArt — invented by John Davis. The HeArt of the Internet.</p>
 </main>
 <script>
+  document.getElementById('invite-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    var email = document.getElementById('invite-email').value.trim();
+    var msg = document.getElementById('invite-msg');
+    var btn = document.getElementById('invite-btn');
+    if (!email) { msg.textContent = 'Enter your email address.'; return; }
+    btn.disabled = true;
+    btn.textContent = 'Requesting…';
+    msg.textContent = '';
+    try {
+      var r = await fetch('/invite-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok) {
+        msg.style.color = '#b3261e';
+        msg.textContent = (data && data.detail) ? data.detail : ('Something went wrong (HTTP ' + r.status + ').');
+        btn.disabled = false;
+        btn.textContent = 'Request an invite';
+        return;
+      }
+      msg.style.color = '#1e7b34';
+      msg.textContent = data.message || "You're on the list.";
+      btn.textContent = 'Request an invite';
+    } catch (e) {
+      msg.style.color = '#b3261e';
+      msg.textContent = 'Could not reach the HeArt server. Check your connection and try again.';
+      btn.disabled = false;
+      btn.textContent = 'Request an invite';
+    }
+  });
+
   document.getElementById('subscribe-form').addEventListener('submit', async function (event) {
     event.preventDefault();
     var key = document.getElementById('api-key').value.trim();

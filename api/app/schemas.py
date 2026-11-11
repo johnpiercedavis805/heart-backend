@@ -255,7 +255,19 @@ class RegistryVerifyOut(BaseModel):
     verified_at: str  # ISO-8601 UTC, exactly as signed
 
 
-# ------------------------------------------------ Stripe billing (HeArt Premium, Nov 8) ---
+# ------------------------------------------------------------ subscribe pages --
+
+
+class InviteRequestIn(BaseModel):
+    """Email capture for a HeArt v1 invite (landing page, Nov 10 2026)."""
+
+    email: str = Field(min_length=3, max_length=320)
+
+
+class InviteRequestOut(BaseModel):
+    ok: bool = True
+    message: str = "You're on the list — we'll email your invite code when a spot opens."
+
 class CheckoutIn(BaseModel):
     currency: str = Field(default="usd", pattern="^(usd|usdc)$")  # "usdc" = pay the $9.99 subscription in USDC (stablecoin; Stripe settles in USD)
 
