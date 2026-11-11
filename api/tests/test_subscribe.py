@@ -224,6 +224,36 @@ def main() -> int:
     r = client.get("/subscribe/does-not-exist")
     check("GET /subscribe/<unknown> -> 404", r.status_code == 404, f"got {r.status_code}")
 
+    # ------------------------------------------- policy pages (Stripe, Nov 11) ---
+    # The 7 pages Stripe requires publicly accessible on the site. Drafted
+    # locally Nov 11, 2026 for the Stripe fork (a); they go live only on
+    # John's explicit yes. Each must 200 as HTML with no auth, and carry
+    # the content Stripe asked for — notably the Terms ban on human
+    # trafficking (incl. sexual exploitation) and on aiding/abetting/
+    # encouraging abuse.
+    _POLICY_PAGES = {
+        "/terms": ["Terms and Conditions", "Human trafficking",
+                   "sexual exploitation", "Aiding, abetting"],
+        "/acceptable-use": ["Acceptable Use Policy", "Human trafficking"],
+        "/privacy": ["Privacy Policy", "never receives or stores"],
+        "/pricing": ["Pricing", "$9.99", "Free for AI agents"],
+        "/refund": ["Refund Policy", "$9.99"],
+        "/law-enforcement": ["Law Enforcement Protocols", "NCMEC"],
+        "/contact": ["johnpiercedavis805@gmail.com", "6021 Hollister Ave"],
+    }
+    for path, needles in _POLICY_PAGES.items():
+        r = client.get(path)
+        check(f"GET {path} -> 200", r.status_code == 200, f"got {r.status_code}")
+        check(f"GET {path} is HTML",
+              "text/html" in r.headers.get("content-type", ""), r.headers.get("content-type", ""))
+        for needle in needles:
+            check(f"{path} contains {needle!r}", needle in r.text)
+    r = client.get("/")
+    check("landing page links all 7 policy pages",
+          all(f'href="/{p}"' in r.text for p in
+              ("terms", "acceptable-use", "privacy", "pricing", "refund",
+               "law-enforcement", "contact")))
+
     passed = sum(1 for s, _, _ in results if s == PASS)
     failed = sum(1 for s, _, _ in results if s == FAIL)
     print(f"\n{passed} passed, {failed} failed")

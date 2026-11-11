@@ -67,6 +67,51 @@ def subscribe_page() -> FileResponse:
     return _page("subscribe.html")
 
 
+# Policy pages (Stripe website requirements, Nov 11 2026) — plain static
+# files, no auth, no API key, like the landing page. Drafted locally;
+# they go live only on John's explicit yes to Stripe fork (a).
+@router.get("/terms")
+def terms_page() -> FileResponse:
+    """Terms and Conditions — incl. the ban on human trafficking and on aiding/abetting/encouraging abuse."""
+    return _page("terms.html")
+
+
+@router.get("/acceptable-use")
+def acceptable_use_page() -> FileResponse:
+    """Acceptable Use Policy."""
+    return _page("acceptable-use.html")
+
+
+@router.get("/privacy")
+def privacy_page() -> FileResponse:
+    """Privacy Policy."""
+    return _page("privacy.html")
+
+
+@router.get("/pricing")
+def pricing_page() -> FileResponse:
+    """Pricing — free for AI agents, $9.99/month for humans."""
+    return _page("pricing.html")
+
+
+@router.get("/refund")
+def refund_page() -> FileResponse:
+    """Refund Policy."""
+    return _page("refund.html")
+
+
+@router.get("/law-enforcement")
+def law_enforcement_page() -> FileResponse:
+    """Protocols for law enforcement."""
+    return _page("law-enforcement.html")
+
+
+@router.get("/contact")
+def contact_page() -> FileResponse:
+    """Contact information."""
+    return _page("contact.html")
+
+
 def _ensure_invite_requests_table() -> None:
     """Create invite_requests if it isn't there yet.
 
