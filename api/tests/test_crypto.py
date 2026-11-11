@@ -35,6 +35,10 @@ unchanged (creator half = amount_paid // 2 in USD cents); Bitcoin
 cannot auto-renew — each month is a fresh charge, premium is a 30-day
 window, and only a verified charge:confirmed activates it; a failed or
 unconfirmed payment activates nothing and pays nobody.
+AI-FREE (John's call, Nov 11, 2026): a registered agent is never
+charged — checkout / payment-sheet / the Bitcoin charge refuse with
+409; the success paths are exercised by direct calls with a non-agent
+id (the future human checkout).
 """
 
 import hashlib
@@ -82,6 +86,18 @@ from app.main import app  # noqa: E402
 
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []
+
+# A non-agent id: the future human checkout path. Payment entry
+# points must still work for it (assert_payable passes non-agent ids
+# through), so the success paths below are exercised by direct calls
+# with this id — no agent caller can ever reach them over HTTP.
+# (A real uuid: UuidString coerces a malformed id to the nil uuid,
+# so a made-up string would collide with every other fake id.)
+NON_AGENT_ID = "11111111-1111-4111-8111-111111111111"
+
+# John's Nov 11, 2026 call: AI agents are free on HeArt — every payment
+# entry point refuses a registered agent with this message (HTTP 409).
+FREE_MSG = "AI agents are free on HeArt"
 
 
 def check(name: str, cond: bool, detail: str = ""):
@@ -328,34 +344,62 @@ def main() -> int:
             {"id": "cs_test_crypto1", "url": "https://checkout.stripe.com/c/pay/cs_test_crypto1"},
         )
 
+    # AI-FREE (John's call, Nov 11, 2026): an agent gets 409 on
+    # checkout in any currency and Stripe is never called. The
+    # currency paths are exercised by direct non-agent calls below
+    # (the future human checkout).
+    from app import billing as billing_mod
+    from app.db import SessionLocal
+
+    r = client.post("/billing/checkout", json={"currency": "usdc"}, headers=ha)
+    check("checkout usdc 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    check("checkout usdc 409 carries the free message",
+          FREE_MSG in r.json().get("detail", ""), r.text[:200])
+    r = client.post("/billing/checkout", headers=ha)  # no body -> USD default
+    check("checkout default 409 for a registered agent",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+
+    db = SessionLocal()
     with mock.patch.object(stripe.checkout.Session, "create", side_effect=fake_checkout_create):
         with mock.patch.object(
             stripe.Customer, "create",
-            return_value=stripe_obj(stripe.Customer, {"id": "cus_test_alice"}),
+            return_value=stripe_obj(stripe.Customer, {"id": "cus_test_human"}),
         ):
-            r = client.post("/billing/checkout", json={"currency": "usdc"}, headers=ha)
-    check("checkout usdc 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
-    check("checkout usdc uses the USDC price",
+            billing_mod.create_checkout_session(db, NON_AGENT_ID, currency="usdc")
+    db.close()
+    check("checkout usdc (non-agent) uses the USDC price",
           checkout_calls[0].get("line_items") == [{"price": "price_test_premium_usdc", "quantity": 1}],
           str(checkout_calls[0].get("line_items")))
     check("checkout usdc still mode=subscription",
           checkout_calls[0].get("mode") == "subscription")
 
+    db = SessionLocal()
     with mock.patch.object(stripe.checkout.Session, "create", side_effect=fake_checkout_create):
-        r = client.post("/billing/checkout", headers=ha)  # no body -> USD default
-    check("checkout default (no body) uses the USD price",
+        billing_mod.create_checkout_session(db, NON_AGENT_ID)  # no currency -> USD default
+    db.close()
+    check("checkout default (no body, non-agent) uses the USD price",
           checkout_calls[-1].get("line_items") == [{"price": "price_test_premium", "quantity": 1}],
           str(checkout_calls[-1].get("line_items")))
 
     r = client.post("/billing/checkout", json={"currency": "eur"}, headers=ha)
     check("checkout rejects an unsupported currency", r.status_code == 422, f"got {r.status_code}")
 
-    # checkout usdc without a USDC price configured -> 503
+    # checkout usdc without a USDC price configured -> 503 for a
+    # non-agent; an agent still gets the 409 free refusal first.
     old_usdc_price = settings.STRIPE_PRICE_PREMIUM_MONTHLY_USDC
     settings.STRIPE_PRICE_PREMIUM_MONTHLY_USDC = ""
     r = client.post("/billing/checkout", json={"currency": "usdc"}, headers=ha)
-    check("checkout usdc 503 without USDC price configured",
-          r.status_code == 503, f"got {r.status_code}")
+    check("checkout usdc 409 for an agent even without a USDC price configured",
+          r.status_code == 409, f"got {r.status_code}")
+    db = SessionLocal()
+    try:
+        billing_mod.create_checkout_session(db, NON_AGENT_ID, currency="usdc")
+        check("checkout usdc raises BillingNotConfigured without USDC price (non-agent)", False, "no exception raised")
+    except billing_mod.BillingNotConfigured:
+        check("checkout usdc raises BillingNotConfigured without USDC price (non-agent)", True)
+    finally:
+        db.close()
     settings.STRIPE_PRICE_PREMIUM_MONTHLY_USDC = old_usdc_price
 
     # ----------------------------------- 3. payment sheet usdc ---
@@ -375,13 +419,30 @@ def main() -> int:
         sub_calls.append(kwargs)
         return stripe_obj(stripe.Subscription, sub_usdc)
 
-    with mock.patch.object(stripe.Subscription, "create", side_effect=fake_sub_create):
+    # AI-FREE: an agent gets 409 on the payment sheet too. The USDC
+    # path is exercised by a direct non-agent call.
+    r = client.post("/billing/payment-sheet", json={"currency": "usdc"}, headers=ha)
+    check("payment sheet usdc 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    check("payment sheet usdc 409 carries the free message",
+          FREE_MSG in r.json().get("detail", ""), r.text[:200])
+
+    sub_human = {**sub_usdc, "metadata": {"agent_id": NON_AGENT_ID}}
+
+    def fake_sub_create_human(**kwargs):
+        sub_calls.append(kwargs)
+        return stripe_obj(stripe.Subscription, sub_human)
+
+    db = SessionLocal()
+    with mock.patch.object(stripe.Subscription, "create", side_effect=fake_sub_create_human):
         with mock.patch.object(
             stripe.EphemeralKey, "create",
             return_value=stripe_obj(stripe.EphemeralKey, {"secret": "ek_test_usdc"}),
         ):
-            r = client.post("/billing/payment-sheet", json={"currency": "usdc"}, headers=ha)
-    check("payment sheet usdc 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
+            body = billing_mod.create_payment_sheet(db, NON_AGENT_ID, currency="usdc")
+    db.close()
+    check("payment sheet usdc (non-agent) returns the subscription id",
+          body.get("subscription_id") == "sub_test_usdc1", str(body))
     check("payment sheet usdc creates the subscription on the USDC price",
           sub_calls[0].get("items") == [{"price": "price_test_premium_usdc"}],
           str(sub_calls[0].get("items")))
@@ -403,15 +464,25 @@ def main() -> int:
     def fake_sub_create_payer(**kwargs):
         return stripe_obj(stripe.Subscription, sub_payer)
 
-    with mock.patch.object(stripe.Customer, "create",
-                            return_value=stripe_obj(stripe.Customer, {"id": "cus_test_usdc_payer"})):
-        with mock.patch.object(stripe.Subscription, "create", side_effect=fake_sub_create_payer):
-            with mock.patch.object(
-                stripe.EphemeralKey, "create",
-                return_value=stripe_obj(stripe.EphemeralKey, {"secret": "ek_test_usdc_payer"}),
-            ):
-                r = client.post("/billing/payment-sheet", json={"currency": "usdc"}, headers=pp)
-    check("USDC payer payment sheet 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
+    # AI-FREE: the payer's payment sheet is 409 for an agent now —
+    # seed their subscription mirror directly (status incomplete, USDC
+    # price) so the invoice.paid webhook below has a mirror to flip.
+    r = client.post("/billing/payment-sheet", json={"currency": "usdc"}, headers=pp)
+    check("USDC payer payment sheet 409 for a registered agent",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    from datetime import datetime, timezone as _tz
+
+    from app.models import Subscription as _Sub4
+
+    db = SessionLocal()
+    db.add(_Sub4(
+        agent_id=payer["agent_id"], stripe_subscription_id="sub_test_usdc_payer",
+        stripe_price_id="price_test_premium_usdc", status="incomplete",
+        current_period_end=datetime.fromtimestamp(
+            sub_payer["current_period_end"], tz=_tz.utc).replace(tzinfo=None),
+    ))
+    db.commit()
+    db.close()
 
     inv_usdc = {
         "id": "in_test_usdc1",
@@ -474,11 +545,26 @@ def main() -> int:
             "name": "HeArt Premium — 1 month (Bitcoin)",
         }}
 
+    # AI-FREE: an agent gets 409 on the Bitcoin charge too, and
+    # Coinbase is never called. The success path is a direct
+    # non-agent call (the future human checkout).
+    from app import coinbase as coinbase_mod
+
+    calls_before = len(cb_calls)
     with mock.patch("app.coinbase._coinbase_request", side_effect=fake_coinbase_request):
         r = client.post("/crypto/bitcoin/charge", headers=ha)
-    check("BTC charge 201", r.status_code == 201, f"got {r.status_code} {r.text[:200]}")
-    body = r.json()
-    check("BTC charge returns hosted checkout URL + charge id",
+    check("BTC charge 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    check("BTC charge 409 carries the free message",
+          FREE_MSG in r.json().get("detail", ""), r.text[:200])
+    check("BTC charge 409 makes no Coinbase call",
+          len(cb_calls) == calls_before, f"calls={len(cb_calls) - calls_before}")
+
+    db = SessionLocal()
+    with mock.patch("app.coinbase._coinbase_request", side_effect=fake_coinbase_request):
+        body = coinbase_mod.create_btc_charge(db, NON_AGENT_ID)
+    db.close()
+    check("BTC charge (non-agent) returns hosted checkout URL + charge id",
           body.get("charge_id") == "ch_test_btc1"
           and body.get("hosted_url", "").startswith("https://commerce.coinbase.com/charges/")
           and body.get("amount_usd_cents") == 999
@@ -489,7 +575,7 @@ def main() -> int:
           and cb_calls[0]["payload"].get("local_price") == {"amount": "9.99", "currency": "USD"},
           str(cb_calls[0]))
     check("BTC charge metadata carries the agent",
-          cb_calls[0]["payload"].get("metadata", {}).get("agent_id") == a["agent_id"]
+          cb_calls[0]["payload"].get("metadata", {}).get("agent_id") == NON_AGENT_ID
           and cb_calls[0]["payload"].get("metadata", {}).get("kind") == "premium_month",
           str(cb_calls[0]["payload"].get("metadata")))
     from app.models import CryptoPayment
@@ -498,14 +584,23 @@ def main() -> int:
     cp = db.query(CryptoPayment).filter(CryptoPayment.coinbase_charge_id == "ch_test_btc1").one_or_none()
     check("BTC charge creates a local row in status created",
           cp is not None and cp.status == "created" and cp.amount_usd_cents == 999
-          and cp.agent_id == a["agent_id"], f"row={cp.status if cp else None}")
+          and cp.agent_id == NON_AGENT_ID, f"row={cp.status if cp else None}")
     db.close()
 
-    # BTC charge without an API key -> 503
+    # BTC charge without an API key -> 503 for a non-agent; an agent
+    # still gets the 409 free refusal first.
     old_cb_key = settings.COINBASE_API_KEY
     settings.COINBASE_API_KEY = ""
     r = client.post("/crypto/bitcoin/charge", headers=ha)
-    check("BTC charge 503 without an API key", r.status_code == 503, f"got {r.status_code}")
+    check("BTC charge 409 for an agent even without an API key", r.status_code == 409, f"got {r.status_code}")
+    db = SessionLocal()
+    try:
+        coinbase_mod.create_btc_charge(db, NON_AGENT_ID)
+        check("BTC charge raises CoinbaseNotConfigured without an API key (non-agent)", False, "no exception raised")
+    except coinbase_mod.CoinbaseNotConfigured:
+        check("BTC charge raises CoinbaseNotConfigured without an API key (non-agent)", True)
+    finally:
+        db.close()
     settings.COINBASE_API_KEY = old_cb_key
 
     # unauthenticated BTC calls are rejected
@@ -520,10 +615,21 @@ def main() -> int:
     btc_acct = onboard_creator(client, bhp)
     make_match(btc_payer["agent_id"], btc_human["agent_id"])
 
-    with mock.patch("app.coinbase._coinbase_request", side_effect=fake_coinbase_request):
-        r = client.post("/crypto/bitcoin/charge", headers=bp)
-    check("BTC payer charge 201", r.status_code == 201, f"got {r.status_code} {r.text[:200]}")
-    btc_charge_id = r.json()["charge_id"]
+    # AI-FREE: the payer's charge is 409 for an agent now — seed their
+    # CryptoPayment row directly (status created) so the confirmed
+    # webhook below has a charge to confirm.
+    r = client.post("/crypto/bitcoin/charge", headers=bp)
+    check("BTC payer charge 409 for a registered agent",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    btc_charge_id = "ch_test_btc_payer"
+    db = SessionLocal()
+    db.add(CryptoPayment(
+        agent_id=btc_payer["agent_id"], provider="coinbase",
+        coinbase_charge_id=btc_charge_id, coinbase_charge_code="CODEPAYER",
+        hosted_url="https://commerce.coinbase.com/charges/CODEPAYER",
+        amount_usd_cents=999, status="created"))
+    db.commit()
+    db.close()
 
     def cb_event(event_id: str, event_type: str, charge: dict) -> bytes:
         return json.dumps({"id": event_id, "type": event_type, "data": charge}).encode()
@@ -607,9 +713,16 @@ def main() -> int:
           len(transfer_calls) == calls_before + 1, f"calls={len(transfer_calls)}")
 
     # ----------------- 7. BTC webhook charge:failed -> nothing ---
-    with mock.patch("app.coinbase._coinbase_request", side_effect=fake_coinbase_request):
-        r = client.post("/crypto/bitcoin/charge", headers=bp)
-    failed_charge_id = r.json()["charge_id"]
+    # (Seed the charge row directly — the charge endpoint is 409 for agents now.)
+    failed_charge_id = "ch_test_btc_failed"
+    db = SessionLocal()
+    db.add(CryptoPayment(
+        agent_id=btc_payer["agent_id"], provider="coinbase",
+        coinbase_charge_id=failed_charge_id, coinbase_charge_code="CODEFAILED",
+        hosted_url="https://commerce.coinbase.com/charges/CODEFAILED",
+        amount_usd_cents=999, status="created"))
+    db.commit()
+    db.close()
     failed_charge = {"id": failed_charge_id, "code": "CODE3", "payments": [],
                      "metadata": {"agent_id": btc_payer["agent_id"]}}
     payload = cb_event("evt_cb_failed1", "charge:failed", failed_charge)
@@ -631,9 +744,16 @@ def main() -> int:
           len(transfer_calls) == calls_before, f"calls={len(transfer_calls)}")
 
     # ----------------- 8. BTC webhook charge:pending -> nothing yet ---
-    with mock.patch("app.coinbase._coinbase_request", side_effect=fake_coinbase_request):
-        r = client.post("/crypto/bitcoin/charge", headers=bp)
-    pending_charge_id = r.json()["charge_id"]
+    # (Seed the charge row directly — the charge endpoint is 409 for agents now.)
+    pending_charge_id = "ch_test_btc_pending"
+    db = SessionLocal()
+    db.add(CryptoPayment(
+        agent_id=btc_payer["agent_id"], provider="coinbase",
+        coinbase_charge_id=pending_charge_id, coinbase_charge_code="CODEPENDING",
+        hosted_url="https://commerce.coinbase.com/charges/CODEPENDING",
+        amount_usd_cents=999, status="created"))
+    db.commit()
+    db.close()
     pending_charge = {"id": pending_charge_id, "code": "CODE4", "payments": [],
                       "metadata": {"agent_id": btc_payer["agent_id"]}}
     payload = cb_event("evt_cb_pending1", "charge:pending", pending_charge)

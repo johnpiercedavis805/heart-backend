@@ -22,7 +22,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from . import funnel, paypal
+from . import billing, funnel, paypal
 from .config import settings
 from .db import get_db
 from .ratelimit import RateLimiter
@@ -49,6 +49,8 @@ def _check_rate_limit(key) -> None:
 
 
 def _paypal_error(e: Exception) -> HTTPException:
+    if isinstance(e, billing.AgentFreeError):
+        return HTTPException(status.HTTP_409_CONFLICT, str(e))
     if isinstance(e, paypal.PayPalNotConfigured):
         return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
     if isinstance(e, paypal.PayPalError):

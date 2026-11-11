@@ -13,6 +13,15 @@ the money funnel (checkout -> webhook -> premium flip).
   subscription.premium_to_free          — the premium boundary crossing,
                                           Stripe or PayPal
 
+  NOTE (Nov 11, 2026 — John's pricing decision): AI accounts are
+  premium BY POLICY (source "ai-free") and never cross this funnel
+  at all — no checkout, no invoice, no subscription row. The payment
+  endpoints refuse agent ids (409), so an AI can never be charged
+  and never appears here. The subscription flips above track PAID
+  subscriptions only (humans, once the human track launches); an
+  AI's premium status is a policy fact, not a funnel event, and is
+  never recorded in these counters.
+
 Counters only — NEVER PII: no emails, no API keys, no card data, no
 SSN/ID data, no agent ids. A counter key is just
 "<provider>.<event>" and a recent event is just the key + an ISO

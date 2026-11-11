@@ -142,7 +142,11 @@ def create_btc_charge(
     charge expires after 1 hour if unpaid (Coinbase's rule) — the user
     just creates a fresh one. A local CryptoPayment row is created in
     status "created"; only the charge:confirmed webhook moves it to
-    "confirmed" and activates premium (never the redirect alone)."""
+    "confirmed" and activates premium (never the redirect alone).
+
+    AI-FREE (John's call, Nov 11, 2026): a registered agent is refused
+    up front (AgentFreeError) — agents never pay, on any rail."""
+    billing.assert_payable(db, agent_id)
     _require_key()
     payload: dict = {
         "name": "HeArt Premium — 1 month (Bitcoin)",

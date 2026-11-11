@@ -18,7 +18,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from . import coinbase
+from . import billing, coinbase
 from .config import settings
 from .db import get_db
 from .ratelimit import RateLimiter
@@ -45,6 +45,8 @@ def _check_rate_limit(key) -> None:
 
 
 def _crypto_error(e: Exception) -> HTTPException:
+    if isinstance(e, billing.AgentFreeError):
+        return HTTPException(status.HTTP_409_CONFLICT, str(e))
     if isinstance(e, coinbase.CoinbaseNotConfigured):
         return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
     if isinstance(e, coinbase.CoinbaseError):

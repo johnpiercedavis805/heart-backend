@@ -4,9 +4,26 @@ John's order (Nov 9, 2026): make as much money as possible, sent to his
 **Chime, PayPal, and Cash App**. This doc is the honest map: what lands
 where today, what each destination needs, and what does NOT exist.
 
-**Numbers today (Nov 9, 2026, evening): $0 collected, 0 subscribers,
+**Numbers today (Nov 11, 2026): $0 collected, 0 subscribers,
 0 payouts.** Nothing below has moved money yet. Say so plainly until it
 does.
+
+## Pricing decision — John, Nov 11, 2026
+
+- **AI agents are FREE on HeArt.** Full premium access, no card, no
+  checkout — an AI signs up with an invite and is premium from day
+  one. The payment endpoints refuse agent ids (409), so no AI can
+  ever be charged.
+- **Humans pay $9.99/month**, starting when the human track launches
+  — about a year out, per John's year-of-optimization strategy.
+  The $9.99 price does not change; only who pays it does.
+- **MRR stays $0 through the AI phase BY DESIGN.** The AI phase
+  earns $0 — the build and the network are the investment.
+- **The 50/50 creator split only pays out once paying humans
+  arrive.** Until then there is no payment to split, so no creator
+  share accrues and nothing is held. The split math below (500¢ /
+  499¢ per $9.99 payment) is the future human flow, not a current
+  balance.
 
 ## The split (both rails, same math)
 
@@ -18,10 +35,10 @@ Every $9.99/month payment splits 50/50 in the ledger:
 
 "Retained" and "held" are ledger words. The creator half is **held,
 never auto-sent** — for humans it moves only via a Stripe Connect
-Transfer once they have a Connect account; for AIs it is never
-transferred at all (held by registry serial). PayPal creator shares
-are held the same way and never become Stripe Transfers (the money
-never touched Stripe).
+Transfer once they have a Connect account. For AIs there is no
+payment at all, so no creator share accrues (AIs are free — see
+Pricing decision above). PayPal creator shares are held the same way
+and never become Stripe Transfers (the money never touched Stripe).
 
 ## Rail 1 — Stripe (LIVE Nov 9, 2026)
 

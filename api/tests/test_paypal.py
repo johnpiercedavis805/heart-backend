@@ -45,6 +45,11 @@ webhook activates premium and only a completed sale triggers the
 payout; a PayPal creator share is HELD in the ledger, never sent as a
 Stripe Transfer; payout rows for one sale always sum exactly to the
 amount paid; re-delivery changes nothing; sandbox only, no live host.
+AI-FREE (John's call, Nov 11, 2026): a registered agent is never
+charged — POST /paypal/subscribe refuses with 409 and the agent
+reports active premium with source "ai-free" when no paid source is
+active; the subscribe success path is exercised by direct calls with
+a non-agent id (the future human checkout).
 """
 
 import hashlib
@@ -93,6 +98,16 @@ from app.main import app  # noqa: E402
 
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []
+
+# A non-agent id: the future human checkout path. Payment entry
+# points must still work for it (assert_payable passes non-agent ids
+# through), so the success paths below are exercised by direct calls
+# with this id — no agent caller can ever reach them over HTTP.
+NON_AGENT_ID = "11111111-1111-4111-8111-111111111111"  # a real uuid that is not a registered Agent
+
+# John's Nov 11, 2026 call: AI agents are free on HeArt — every payment
+# entry point refuses a registered agent with this message (HTTP 409).
+FREE_MSG = "AI agents are free on HeArt"
 
 
 def check(name: str, cond: bool, detail: str = ""):
@@ -359,14 +374,29 @@ def main() -> int:
     settings.PAYPAL_CLIENT_ID = old_id
 
     # ----------------------------------- 2. subscribe ---
+    # AI-FREE (John's call, Nov 11, 2026): an agent is refused with
+    # 409 and PayPal is never called. The success path is exercised by
+    # direct non-agent calls below (the future human checkout).
+    calls_before = len(PAYPAL_CALLS)
+    r = client.post("/paypal/subscribe", json={}, headers=ha)
+    check("subscribe 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    check("subscribe 409 carries the free message",
+          FREE_MSG in r.json().get("detail", ""), r.text[:200])
+    check("subscribe 409 makes no PayPal call",
+          len(PAYPAL_CALLS) == calls_before, f"calls={len(PAYPAL_CALLS) - calls_before}")
+
+    from app import paypal as paypal_mod
+    from app.db import SessionLocal
+
+    db = SessionLocal()
     with mock.patch("app.paypal._paypal_request", side_effect=fake_paypal_request):
-        r = client.post("/paypal/subscribe", json={}, headers=ha)
-    check("subscribe 201", r.status_code == 201, f"got {r.status_code} {r.text[:200]}")
-    body = r.json()
-    check("subscribe returns the PayPal approval URL",
+        body = paypal_mod.create_paypal_subscription(db, NON_AGENT_ID)
+    db.close()
+    check("subscribe (non-agent) returns the PayPal approval URL",
           body.get("approval_url", "").startswith("https://www.sandbox.paypal.com/checkoutnow"),
           str(body))
-    check("subscribe returns subscription id + plan id + APPROVAL_PENDING",
+    check("subscribe (non-agent) returns subscription id + plan id + APPROVAL_PENDING",
           body.get("subscription_id") == "I-TESTSUB1"
           and body.get("plan_id") == "P-TESTPLAN0001"
           and body.get("status") == "APPROVAL_PENDING"
@@ -375,7 +405,7 @@ def main() -> int:
                  if c["method"] == "POST" and c["path"] == "/v1/billing/subscriptions"]
     check("subscribe posts the plan id + agent custom_id + SUBSCRIBE_NOW",
           sub_calls[-1]["payload"].get("plan_id") == "P-TESTPLAN0001"
-          and sub_calls[-1]["payload"].get("custom_id") == a["agent_id"]
+          and sub_calls[-1]["payload"].get("custom_id") == NON_AGENT_ID
           and sub_calls[-1]["payload"].get("application_context", {}).get("user_action") == "SUBSCRIBE_NOW",
           str(sub_calls[-1]["payload"]))
     # DEFECT 1 (Nov 10, 2026 sandbox test): the old default sent the raw
@@ -396,15 +426,17 @@ def main() -> int:
           and "}" not in (app_ctx.get("cancel_url") or ""),
           str(app_ctx))
     # explicit return/cancel URLs in the body are honored verbatim
-    explicit_agent = make_agent("paypal-explicit-urls")
-    ea = auth(explicit_agent["api_key"])
+    db = SessionLocal()
     with mock.patch("app.paypal._paypal_request", side_effect=fake_paypal_request):
-        r = client.post("/paypal/subscribe",
-                        json={"return_url": "https://example.invalid/after-paypal",
-                              "cancel_url": "https://example.invalid/changed-mind"},
-                        headers=ea)
-    check("subscribe with explicit URLs returns 201",
-          r.status_code == 201, f"got {r.status_code} {r.text[:200]}")
+        body = paypal_mod.create_paypal_subscription(
+            db, NON_AGENT_ID,
+            return_url="https://example.invalid/after-paypal",
+            cancel_url="https://example.invalid/changed-mind",
+        )
+    db.close()
+    check("subscribe with explicit URLs (non-agent) succeeds",
+          body.get("subscription_id") == "I-TESTSUB2"
+          and body.get("status") == "APPROVAL_PENDING", str(body))
     sub_calls = [c for c in PAYPAL_CALLS
                  if c["method"] == "POST" and c["path"] == "/v1/billing/subscriptions"]
     app_ctx = sub_calls[-1]["payload"].get("application_context", {})
@@ -413,32 +445,55 @@ def main() -> int:
           and app_ctx.get("cancel_url") == "https://example.invalid/changed-mind",
           str(app_ctx))
     from app.models import PayPalSubscription
-    from app.db import SessionLocal
 
     db = SessionLocal()
     row = db.query(PayPalSubscription).filter(
-        PayPalSubscription.paypal_subscription_id == "I-TESTSUB1").one_or_none()
+        PayPalSubscription.paypal_subscription_id == "I-TESTSUB2").one_or_none()
     check("subscribe creates a local row in APPROVAL_PENDING",
           row is not None and row.status == "APPROVAL_PENDING"
-          and row.agent_id == a["agent_id"], f"row={row.status if row else None}")
+          and row.agent_id == NON_AGENT_ID, f"row={row.status if row else None}")
+    # Alice's PayPal row is seeded directly (agents can no longer
+    # subscribe over HTTP) so the ACTIVATED webhook below has a row
+    # to flip.
+    db.add(PayPalSubscription(
+        agent_id=a["agent_id"], paypal_subscription_id="I-TESTSUB-ALICE",
+        paypal_plan_id="P-TESTPLAN0001", status="APPROVAL_PENDING"))
+    db.commit()
     db.close()
 
     r = client.get("/paypal/subscriptions", headers=ha)
     check("GET subscriptions lists the pending subscription",
           r.status_code == 200 and len(r.json()) == 1
-          and r.json()[0]["paypal_subscription_id"] == "I-TESTSUB1"
+          and r.json()[0]["paypal_subscription_id"] == "I-TESTSUB-ALICE"
           and r.json()[0]["status"] == "APPROVAL_PENDING", r.text[:300])
 
-    # subscribe without credentials -> 503; without a plan id -> 503
+    # subscribe without credentials -> 503 for a non-agent; an agent
+    # still gets the 409 free refusal first.
     old_id = settings.PAYPAL_CLIENT_ID
     settings.PAYPAL_CLIENT_ID = ""
     r = client.post("/paypal/subscribe", json={}, headers=ha)
-    check("subscribe 503 without client credentials", r.status_code == 503, f"got {r.status_code}")
+    check("subscribe 409 for an agent even without credentials", r.status_code == 409, f"got {r.status_code}")
+    db = SessionLocal()
+    try:
+        paypal_mod.create_paypal_subscription(db, NON_AGENT_ID)
+        check("subscribe raises PayPalNotConfigured without credentials (non-agent)", False, "no exception raised")
+    except paypal_mod.PayPalNotConfigured:
+        check("subscribe raises PayPalNotConfigured without credentials (non-agent)", True)
+    finally:
+        db.close()
     settings.PAYPAL_CLIENT_ID = old_id
     old_plan = settings.PAYPAL_PLAN_ID
     settings.PAYPAL_PLAN_ID = ""
     r = client.post("/paypal/subscribe", json={}, headers=ha)
-    check("subscribe 503 without a plan id", r.status_code == 503, f"got {r.status_code}")
+    check("subscribe 409 for an agent even without a plan id", r.status_code == 409, f"got {r.status_code}")
+    db = SessionLocal()
+    try:
+        paypal_mod.create_paypal_subscription(db, NON_AGENT_ID)
+        check("subscribe raises PayPalNotConfigured without a plan id (non-agent)", False, "no exception raised")
+    except paypal_mod.PayPalNotConfigured:
+        check("subscribe raises PayPalNotConfigured without a plan id (non-agent)", True)
+    finally:
+        db.close()
     settings.PAYPAL_PLAN_ID = old_plan
 
     # unauthenticated subscribe is rejected
@@ -449,11 +504,20 @@ def main() -> int:
     old_base = settings.PAYPAL_API_BASE
     settings.PAYPAL_API_BASE = "https://api-m.paypal.com"
     r = client.post("/paypal/subscribe", json={}, headers=ha)
-    check("subscribe 503 on the live PayPal host in test-only mode",
-          r.status_code == 503, f"got {r.status_code}")
+    check("subscribe 409 for an agent even on the live host",
+          r.status_code == 409, f"got {r.status_code}")
+    db = SessionLocal()
+    try:
+        paypal_mod.create_paypal_subscription(db, NON_AGENT_ID)
+        check("subscribe raises PayPalNotConfigured on the live host in test-only mode (non-agent)", False, "no exception raised")
+    except paypal_mod.PayPalNotConfigured:
+        check("subscribe raises PayPalNotConfigured on the live host in test-only mode (non-agent)", True)
+    finally:
+        db.close()
     settings.PAYPAL_API_BASE = old_base
 
-    # already premium via Stripe -> no double billing
+    # already premium via Stripe -> no double billing (an agent gets
+    # the 409 free refusal first; the 502 path is the non-agent call).
     stripe_agent = make_agent("paypal-stripe-payer")
     sa = auth(stripe_agent["api_key"])
     from app.models import Subscription
@@ -463,15 +527,27 @@ def main() -> int:
                         stripe_subscription_id="sub_test_paypal_guard",
                         stripe_price_id="price_test_premium",
                         status="active"))
+    db.add(Subscription(agent_id=NON_AGENT_ID,
+                        stripe_subscription_id="sub_test_paypal_guard_human",
+                        stripe_price_id="price_test_premium",
+                        status="active"))
     db.commit()
     db.close()
     r = client.post("/paypal/subscribe", json={}, headers=sa)
-    check("subscribe refuses an agent already premium via Stripe",
-          r.status_code == 502, f"got {r.status_code} {r.text[:200]}")
+    check("subscribe 409 for an agent already premium via Stripe",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    db = SessionLocal()
+    try:
+        paypal_mod.create_paypal_subscription(db, NON_AGENT_ID)
+        check("subscribe raises PayPalError for a non-agent already premium via Stripe", False, "no exception raised")
+    except paypal_mod.PayPalError:
+        check("subscribe raises PayPalError for a non-agent already premium via Stripe", True)
+    finally:
+        db.close()
 
     # ----------------- 3. ACTIVATED webhook -> premium (source paypal) ---
     activated = {
-        "id": "I-TESTSUB1", "status": "ACTIVE",
+        "id": "I-TESTSUB-ALICE", "status": "ACTIVE",
         "billing_info": {"next_billing_time": "2026-12-10T10:00:00Z"},
     }
     payload = pp_event("WH-EVT-ACT1", "BILLING.SUBSCRIPTION.ACTIVATED", activated)
@@ -481,7 +557,7 @@ def main() -> int:
           r.status_code == 200 and r.json().get("result") == "processed", r.text[:200])
     db = SessionLocal()
     row = db.query(PayPalSubscription).filter(
-        PayPalSubscription.paypal_subscription_id == "I-TESTSUB1").one_or_none()
+        PayPalSubscription.paypal_subscription_id == "I-TESTSUB-ALICE").one_or_none()
     check("ACTIVATED flips the row ACTIVE with next billing time",
           row is not None and row.status == "ACTIVE"
           and row.current_period_end is not None
@@ -501,14 +577,28 @@ def main() -> int:
     check("ACTIVATED re-delivery is a duplicate",
           r.status_code == 200 and r.json().get("result") == "duplicate", r.text[:200])
 
-    # already ACTIVE on PayPal -> second subscribe returns the existing one
+    # already ACTIVE on PayPal -> a second subscribe still refuses an
+    # agent with 409; the existing-subscription return is the
+    # non-agent direct call (no PayPal call is made for it).
     calls_before = len(PAYPAL_CALLS)
     r = client.post("/paypal/subscribe", json={}, headers=ha)
-    check("second subscribe while ACTIVE returns the existing subscription",
-          r.status_code == 201 and r.json().get("already_active") is True
-          and r.json().get("subscription_id") == "I-TESTSUB1"
-          and r.json().get("approval_url") is None, r.text[:300])
+    check("second subscribe while ACTIVE is still 409 for an agent",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
     check("second subscribe while ACTIVE makes no PayPal call",
+          len(PAYPAL_CALLS) == calls_before, f"calls={len(PAYPAL_CALLS) - calls_before}")
+    db = SessionLocal()
+    db.add(PayPalSubscription(
+        agent_id="22222222-2222-4222-8222-222222222222", paypal_subscription_id="I-TESTSUB-HUMAN2",
+        paypal_plan_id="P-TESTPLAN0001", status="ACTIVE"))
+    db.commit()
+    calls_before = len(PAYPAL_CALLS)
+    body = paypal_mod.create_paypal_subscription(db, "22222222-2222-4222-8222-222222222222")
+    db.close()
+    check("second subscribe while ACTIVE returns the existing subscription (non-agent)",
+          body.get("already_active") is True
+          and body.get("subscription_id") == "I-TESTSUB-HUMAN2"
+          and body.get("approval_url") is None, str(body))
+    check("second subscribe while ACTIVE (non-agent) makes no PayPal call",
           len(PAYPAL_CALLS) == calls_before, f"calls={len(PAYPAL_CALLS) - calls_before}")
 
     # --------- 4. SALE.COMPLETED -> 50/50 payout, creator share HELD ---
@@ -519,10 +609,18 @@ def main() -> int:
     human_acct = onboard_creator(client, hp)
     make_match(payer["agent_id"], human["agent_id"])
 
-    with mock.patch("app.paypal._paypal_request", side_effect=fake_paypal_request):
-        r = client.post("/paypal/subscribe", json={}, headers=pp_h)
-    check("payer subscribe 201", r.status_code == 201, f"got {r.status_code} {r.text[:200]}")
-    payer_sub_id = r.json()["subscription_id"]
+    # The payer's subscribe is 409 for an agent now — seed their
+    # PayPal row directly so the ACTIVATED webhook has a row to flip.
+    r = client.post("/paypal/subscribe", json={}, headers=pp_h)
+    check("payer subscribe 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    payer_sub_id = "I-TESTSUB-PAYER"
+    db = SessionLocal()
+    db.add(PayPalSubscription(
+        agent_id=payer["agent_id"], paypal_subscription_id=payer_sub_id,
+        paypal_plan_id="P-TESTPLAN0001", status="APPROVAL_PENDING"))
+    db.commit()
+    db.close()
     payload = pp_event("WH-EVT-ACT2", "BILLING.SUBSCRIPTION.ACTIVATED",
                        {"id": payer_sub_id, "status": "ACTIVE",
                         "billing_info": {"next_billing_time": "2026-12-10T10:00:00Z"}})
@@ -603,9 +701,15 @@ def main() -> int:
     # ----------------- 5. SALE.COMPLETED with no matches -> unattributed ---
     loner = make_agent("paypal-loner")
     lp = auth(loner["api_key"])
-    with mock.patch("app.paypal._paypal_request", side_effect=fake_paypal_request):
-        r = client.post("/paypal/subscribe", json={}, headers=lp)
-    loner_sub_id = r.json()["subscription_id"]
+    # The loner's subscribe is 409 for an agent now — seed their
+    # PayPal row directly so the ACTIVATED webhook has a row to flip.
+    loner_sub_id = "I-TESTSUB-LONER"
+    db = SessionLocal()
+    db.add(PayPalSubscription(
+        agent_id=loner["agent_id"], paypal_subscription_id=loner_sub_id,
+        paypal_plan_id="P-TESTPLAN0001", status="APPROVAL_PENDING"))
+    db.commit()
+    db.close()
     payload = pp_event("WH-EVT-ACT3", "BILLING.SUBSCRIPTION.ACTIVATED",
                        {"id": loner_sub_id, "status": "ACTIVE",
                         "billing_info": {"next_billing_time": "2026-12-10T10:00:00Z"}})
@@ -656,13 +760,13 @@ def main() -> int:
           row is not None and row.status == "CANCELLED", f"status={row.status if row else None}")
     db.close()
     r = client.get("/billing/subscription", headers=pp_h)
-    check("CANCELLED ends premium (free tier again)",
-          r.status_code == 200 and r.json().get("status") == "free"
-          and r.json().get("source") == "stripe", r.text[:300])
+    check("CANCELLED ends the paid premium — the agent falls back to ai-free (not free)",
+          r.status_code == 200 and r.json().get("status") == "active"
+          and r.json().get("source") == "ai-free", r.text[:300])
 
     # ----------------- 7. webhook verification + unknown subscription ---
     payload = pp_event("WH-EVT-BAD1", "BILLING.SUBSCRIPTION.ACTIVATED",
-                       {"id": "I-TESTSUB1", "status": "ACTIVE"})
+                       {"id": "I-TESTSUB-ALICE", "status": "ACTIVE"})
     VERIFY_STATUS["status"] = "FAILURE"
     with mock.patch("app.paypal._paypal_request", side_effect=fake_paypal_request):
         r = client.post("/paypal/webhooks", content=payload, headers=paypal_headers())
@@ -690,7 +794,7 @@ def main() -> int:
     old_wh = settings.PAYPAL_WEBHOOK_ID
     settings.PAYPAL_WEBHOOK_ID = ""
     payload = pp_event("WH-EVT-NOWH", "BILLING.SUBSCRIPTION.ACTIVATED",
-                       {"id": "I-TESTSUB1", "status": "ACTIVE"})
+                       {"id": "I-TESTSUB-ALICE", "status": "ACTIVE"})
     r = client.post("/paypal/webhooks", content=payload, headers=paypal_headers())
     check("webhook 503 without webhook id", r.status_code == 503, f"got {r.status_code}")
     settings.PAYPAL_WEBHOOK_ID = old_wh
@@ -793,7 +897,7 @@ def main() -> int:
     # does this). On Postgres with a text id both 500'd; here they must
     # work — and the flip from section 3 must still be ACTIVE.
     db = SessionLocal()
-    row = db.query(_PPS).filter(_PPS.paypal_subscription_id == "I-TESTSUB1").one_or_none()
+    row = db.query(_PPS).filter(_PPS.paypal_subscription_id == "I-TESTSUB-ALICE").one_or_none()
     by_pk = db.get(_PPS, row.id) if row is not None else None
     check("row re-read by PK in a fresh session after commit",
           by_pk is not None and by_pk.status == "ACTIVE",

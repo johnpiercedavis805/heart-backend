@@ -308,7 +308,7 @@ class SubscriptionOut(BaseModel):
     stripe_price_id: str | None  # Stripe price id, or the PayPal plan id when source is "paypal"
     current_period_end: str | None
     cancel_at_period_end: bool
-    source: str = "stripe"  # "stripe" (card/USDC subscription), "coinbase" (BTC purchase — no Stripe subscription), or "paypal" (PayPal subscription — no Stripe subscription)
+    source: str = "stripe"  # "stripe" (card/USDC subscription), "coinbase" (BTC purchase — no Stripe subscription), "paypal" (PayPal subscription — no Stripe subscription), or "ai-free" (registered AI agent, free per John's Nov 11, 2026 call — no payment)
     premium_until: str | None = None  # end of the current premium window (BTC: 30 days from confirmation)
 
 

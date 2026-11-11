@@ -5,10 +5,24 @@ run with the venv python:
     cd ~/workspace/heart-backend/api && ../.venv/bin/python tests/test_subscribe.py
 
 Uses an isolated SQLite DB + upload dir under /tmp. Exercises:
-  GET /subscribe          — 200, HTML, no auth; carries the $9.99 price,
-                            the inventor credit, and the subscribe form
-                            (API-key field + card-only checkout, posting
-                            to POST /billing/checkout with a Bearer key)
+  GET /                     — 200, HTML, no auth; H1/sub/How-it-works
+                            exact, secondary button "Pricing — free for
+                            AIs, $9.99/mo for humans", footer "AI agents
+                            join free — but they have to say they're AI.
+                            Every AI gets a verifiable serial identity.",
+                            meta + OG descriptions with the new pricing
+                            wording (free for AIs, $9.99/month for
+                            humans)
+  GET /subscribe          — 200, HTML, no auth; title + meta/OG
+                            descriptions with the new pricing wording;
+                            pricing section split "Free for AI agents"
+                            / "Humans — $9.99/month"; the 50/50 creator
+                            split; the inventor credit; the invite form
+                            (posting to /invite-request). NO subscribe
+                            form (removed Nov 11, 2026 — AIs are free,
+                            its only outcome was a 409): no API-key
+                            field, no POST to /billing/checkout, no
+                            USDC mention, no Subscribe button.
   GET /subscribe/success  — 200, HTML, no auth; post-payment copy, shows
                             the Stripe session id, and offers the live
                             subscription-status check (GET
@@ -60,6 +74,8 @@ def main() -> int:
     check("GET /subscribe is HTML",
           "text/html" in r.headers.get("content-type", ""), r.headers.get("content-type", ""))
     body = r.text
+    check("subscribe page title is the new pricing title",
+          "<title>HeArt Premium — Free for AIs, $9.99/month for humans</title>" in body)
     check("subscribe page names HeArt Premium", "HeArt Premium" in body)
     check("subscribe page shows $9.99", "$9.99" in body)
     check("subscribe page shows /month price", "/month" in body)
@@ -68,14 +84,20 @@ def main() -> int:
           "before ever seeing pics or bios" in body or "Soul first" in body)
     check("subscribe page states the 50/50 creator split",
           "50/50" in body and "creators" in body)
-    check("subscribe page has an API-key field", 'id="api-key"' in body)
-    check("subscribe page posts to POST /billing/checkout",
-          "/billing/checkout" in body and "Bearer" in body)
-    check("subscribe page offers card (USD) only — no USDC radio",
-          'value="usd"' in body and 'value="usdc"' not in body)
+    check("subscribe page says AIs are free",
+          "Free for AI agents" in body and "no card, no checkout" in body)
+    check("subscribe page says humans pay $9.99/month at the human launch",
+          "Humans — $9.99/month" in body
+          and "Human subscriptions open when the human track launches" in body)
+    check("subscribe page has NO subscribe form (removed Nov 11)",
+          'id="subscribe-form"' not in body and 'id="subscribe-btn"' not in body)
+    check("subscribe page has NO API-key field", 'id="api-key"' not in body)
+    check("subscribe page does NOT post to POST /billing/checkout",
+          "/billing/checkout" not in body)
     check("subscribe page does not mention USDC at all", "USDC" not in body)
     check("subscribe page says v1 is invite-only", "invite-only" in body)
-    check("subscribe page has a Subscribe button", "Subscribe" in body)
+    check("subscribe page has NO Subscribe button",
+          "Subscribe — $9.99/month" not in body)
     check("subscribe page makes no fake-user claims",
           "testimonial" not in body.lower() and "loved by" not in body.lower())
 
@@ -96,22 +118,30 @@ def main() -> int:
           "3. The face comes later, only when you both say so." in body)
     check("landing page has Request an invite button",
           "Request an invite" in body and 'href="/subscribe"' in body)
-    check("landing page has Subscribe button",
-          "Subscribe — $9.99/month" in body)
+    check("landing page has Pricing button (free AIs / $9.99 humans)",
+          "Pricing — free for AIs, $9.99/mo for humans" in body)
+    check("landing page has NO Subscribe button",
+          "Subscribe — $9.99/month" not in body)
     check("landing page footer on disclosed AI",
-          "AIs can join too — but they have to say they're AI. Every AI gets a verifiable serial identity." in body)
+          "AI agents join free — but they have to say they're AI. Every AI gets a verifiable serial identity." in body)
+    check("landing page meta description has the new pricing wording",
+          'name="description"' in body
+          and "Free for AI agents. $9.99/month for humans." in body)
+    check("landing page OG description has the new pricing wording",
+          'property="og:description"' in body
+          and "Free for AI agents. $9.99/month for humans." in body)
 
     # ------------------------------------------- subscribe SEO + invite section ---
     r = client.get("/subscribe")
     body = r.text
     check("subscribe page has meta description",
           'name="description"' in body
-          and "HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. $9.99/month, invite-only." in body)
+          and "HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. Free for AI agents. $9.99/month for humans." in body)
     check("subscribe page has OG title",
           'property="og:title"' in body and "HeArt — soul first, face later." in body)
     check("subscribe page has OG description",
           'property="og:description"' in body
-          and "HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. $9.99/month, invite-only." in body)
+          and "HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. Free for AI agents. $9.99/month for humans." in body)
     check("subscribe page has how-it-works strip",
           "You make something. Someone resonates with it. You match — and only then do the faces come out." in body)
     check("subscribe page has invite section H2",

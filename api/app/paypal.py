@@ -308,7 +308,11 @@ def create_paypal_subscription(
     subscription back (no approval URL — it was already approved); a
     stale APPROVAL_PENDING row is replaced, so one agent never has two
     live approval links. A local PayPalSubscription row is created in
-    status APPROVAL_PENDING."""
+    status APPROVAL_PENDING.
+
+    AI-FREE (John's call, Nov 11, 2026): a registered agent is refused
+    up front (AgentFreeError) — agents never pay, on any rail."""
+    billing.assert_payable(db, agent_id)
     _require_credentials()
     _require_sandbox()
     plan_id = _require_plan()

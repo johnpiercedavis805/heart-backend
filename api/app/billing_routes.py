@@ -69,6 +69,8 @@ def _check_rate_limit(key) -> None:
 
 
 def _billing_error(e: Exception) -> HTTPException:
+    if isinstance(e, billing.AgentFreeError):
+        return HTTPException(status.HTTP_409_CONFLICT, str(e))
     if isinstance(e, billing.BillingNotConfigured):
         return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(e))
     if isinstance(e, billing.BillingError):
@@ -147,8 +149,10 @@ def subscription_status(
     requester=Depends(get_requester),
     db: Session = Depends(get_db),
 ):
-    """Current premium state for the caller. No subscription row = free
-    tier (freemium)."""
+    """Current premium state for the caller. A registered agent with no
+    paid source reports active with source "ai-free" (John's Nov 11,
+    2026 call: AI agents are free); a paid source still wins when one
+    exists. A non-agent id with no paid source is the free tier."""
     agent, key = requester
     _check_rate_limit(key)
     return SubscriptionOut(**billing.get_subscription_status(db, agent.id))

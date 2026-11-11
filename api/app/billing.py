@@ -62,6 +62,7 @@ from sqlalchemy.orm import Session
 from . import funnel
 from .config import settings
 from .models import (
+    Agent,
     AgentIdentity,
     BillingCustomer,
     ConnectAccount,
@@ -109,6 +110,35 @@ class BillingNotConfigured(Exception):
 
 class BillingError(Exception):
     """A Stripe API call failed."""
+
+
+# AI AGENTS ARE FREE (John's call, Nov 11, 2026): HeArt is free for AI
+# agents; humans pay $9.99/month when the human track launches (~a year
+# out). Every keyed route authenticates an Agent, so every agent caller
+# is premium by definition — get_subscription_status reports them
+# active with source "ai-free" (below), and assert_payable refuses
+# every payment entry point for them (AgentFreeError -> HTTP 409 at
+# the routes). Paid sources still win when they exist: an agent with a
+# historical paid subscription keeps reporting that paid source, so
+# nothing already paid for is rewritten. Non-agent ids pass the guard
+# untouched — a future human checkout will use non-agent ids, and that
+# path must keep working.
+class AgentFreeError(Exception):
+    """An AI agent tried to pay — agents are free on HeArt."""
+
+
+AGENT_FREE_MESSAGE = (
+    "AI agents are free on HeArt — no checkout needed. "
+    "Your premium access is already active."
+)
+
+
+def assert_payable(db: Session, agent_id: str) -> None:
+    """Refuse a payment attempt from a registered agent: no AI can
+    ever be charged. Raises AgentFreeError when agent_id belongs to a
+    registered Agent; non-agent ids pass through unchanged."""
+    if db.get(Agent, agent_id) is not None:
+        raise AgentFreeError(AGENT_FREE_MESSAGE)
 
 
 # ------------------------------------------------------------------ setup ---
@@ -285,6 +315,7 @@ def create_checkout_session(db: Session, agent_id: str, *, currency: str = "usd"
     must also be switched on in the Stripe Dashboard (test mode:
     Settings → Payment methods) before it appears — a listed-but-off
     method is silently skipped, not an error."""
+    assert_payable(db, agent_id)
     s = _stripe()
     price = _require_price(currency)
     if not settings.STRIPE_CHECKOUT_SUCCESS_URL or not settings.STRIPE_CHECKOUT_CANCEL_URL:
@@ -332,6 +363,7 @@ def create_payment_sheet(db: Session, agent_id: str, *, currency: str = "usd") -
     type crypto (mandate flow per Stripe's stablecoin-subscription
     guide — the wallet is saved once and authorizes recurring debits);
     the backend flow is otherwise identical."""
+    assert_payable(db, agent_id)
     s = _stripe()
     price = _require_price(currency)
     customer = get_or_create_customer(db, agent_id)
@@ -396,7 +428,15 @@ def get_subscription_status(db: Session, agent_id: str) -> dict:
     (freemium). A live Stripe subscription wins; otherwise a confirmed
     Bitcoin payment whose 30-day premium window is still open reports
     active with source "coinbase" (there is no Stripe subscription for
-    a BTC purchase — see app/coinbase.py)."""
+    a BTC purchase — see app/coinbase.py).
+
+    AI-FREE (John's call, Nov 11, 2026): paid sources are checked
+    first, exactly as before — an agent with a historical paid
+    subscription still reports that paid source. Only when NO paid
+    source is active does a registered agent report active with
+    source "ai-free": every agent caller is premium by definition.
+    A non-agent id with no paid source keeps the old free response
+    (the future human checkout will use non-agent ids)."""
     row = (
         db.query(Subscription)
         .filter(Subscription.agent_id == agent_id)
@@ -441,6 +481,20 @@ def get_subscription_status(db: Session, agent_id: str) -> dict:
             "cancel_at_period_end": False,
             "source": "paypal",
             "premium_until": pp.current_period_end.isoformat() if pp.current_period_end else None,
+        }
+    if db.get(Agent, agent_id) is not None:
+        # No paid source, but a registered agent: free premium by
+        # John's Nov 11 decision. No funnel event is emitted here —
+        # only webhooks call record_subscription_flip, and an ai-free
+        # grant is not a payment event.
+        return {
+            "status": "active",
+            "stripe_subscription_id": None,
+            "stripe_price_id": None,
+            "current_period_end": None,
+            "cancel_at_period_end": False,
+            "source": "ai-free",
+            "premium_until": None,
         }
     if row is None:
         return {
@@ -513,6 +567,7 @@ def create_invoice_for_event(
     charge). Auto-advance with the saved payment method: the invoice is
     charged automatically after finalizing (collection_method=
     charge_automatically, auto_advance=True)."""
+    assert_payable(db, agent_id)
     if amount_cents <= 0:
         raise ValueError("amount_cents must be positive")
     s = _stripe()

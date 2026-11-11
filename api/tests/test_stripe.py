@@ -43,6 +43,12 @@ touches HeArt; creator payouts are 50/50 on a subscription payment —
 human creators by Stripe Transfer, AI creators HELD in the ledger,
 never transferred; payout rows for one invoice always sum exactly to
 the amount paid; re-delivery changes nothing.
+AI-FREE (John's call, Nov 11, 2026): a registered agent is never
+charged — checkout / payment-sheet / invoices refuse with 409 and the
+agent reports active premium with source "ai-free"; the success paths
+are exercised by direct calls with a non-agent id (the future human
+checkout), and a historical paid subscription still reports its paid
+source.
 """
 
 import hashlib
@@ -83,6 +89,16 @@ from app.main import app  # noqa: E402
 
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []
+
+# A non-agent id: the future human checkout path. Payment entry
+# points must still work for it (assert_payable passes non-agent ids
+# through), so the success paths below are exercised by direct calls
+# with this id — no agent caller can ever reach them over HTTP.
+NON_AGENT_ID = "11111111-1111-4111-8111-111111111111"  # a real uuid that is not a registered Agent
+
+# John's Nov 11, 2026 call: AI agents are free on HeArt — every payment
+# entry point refuses a registered agent with this message (HTTP 409).
+FREE_MSG = "AI agents are free on HeArt"
 
 
 def check(name: str, cond: bool, detail: str = ""):
@@ -198,11 +214,46 @@ def main() -> int:
     settings.STRIPE_TEST_MODE_ONLY = True
 
     # billing disabled entirely without a key -> 503, app still runs.
+    # (An agent still gets the 409 free refusal first — the free check
+    # runs before billing is even consulted; the 503 path is the
+    # non-agent direct call below.)
     settings.STRIPE_SECRET_KEY = ""
     r = client.post("/billing/checkout", headers=ha)
-    check("checkout 503 without a key", r.status_code == 503, f"got {r.status_code}")
+    check("checkout 409 for an agent even without a key", r.status_code == 409, f"got {r.status_code}")
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        billing.create_checkout_session(db, NON_AGENT_ID)
+        check("checkout raises BillingNotConfigured without a key (non-agent)", False, "no exception raised")
+    except billing.BillingNotConfigured:
+        check("checkout raises BillingNotConfigured without a key (non-agent)", True)
+    finally:
+        db.close()
     check("billing_enabled False without key", not billing.billing_enabled())
     settings.STRIPE_SECRET_KEY = old_key
+
+    # ------------------------------------------- ai-free: fresh agent ---
+    # A registered agent with no paid source reports active premium
+    # with source "ai-free" (John's Nov 11, 2026 call).
+    fresh = make_agent("stripe-fresh-free")
+    fh = auth(fresh["api_key"])
+    r = client.get("/billing/subscription", headers=fh)
+    check("fresh agent reports active premium (ai-free)",
+          r.status_code == 200 and r.json().get("status") == "active"
+          and r.json().get("source") == "ai-free", r.text[:300])
+    check("ai-free status carries no Stripe ids or period end",
+          r.json().get("stripe_subscription_id") is None
+          and r.json().get("stripe_price_id") is None
+          and r.json().get("current_period_end") is None
+          and r.json().get("premium_until") is None
+          and r.json().get("cancel_at_period_end") is False, r.text[:300])
+    db = SessionLocal()
+    free_status = billing.get_subscription_status(db, "nobody-not-an-agent")
+    db.close()
+    check("non-agent id with no paid source stays free",
+          free_status.get("status") == "free"
+          and free_status.get("source") == "stripe", str(free_status))
 
     # ------------------------------------------------ 2. hosted checkout ---
     checkout_calls: list[dict] = []
@@ -217,15 +268,29 @@ def main() -> int:
              "payment_method_types": ["card", "cashapp"]},
         )
 
+    # AI-FREE: an agent is refused with 409 and Stripe is never called
+    # (the AssertionError mock would 500 the request if it were).
+    with mock.patch.object(
+        stripe.checkout.Session, "create",
+        side_effect=AssertionError("Stripe must not be called for a free agent"),
+    ):
+        r = client.post("/billing/checkout", headers=ha)
+    check("checkout 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    check("checkout 409 carries the free message",
+          FREE_MSG in r.json().get("detail", ""), r.text[:200])
+
+    # The checkout success path still exists for non-agent ids (the
+    # future human checkout) — exercised by direct calls from here on.
+    db = SessionLocal()
     with mock.patch.object(stripe.checkout.Session, "create", side_effect=fake_checkout_create):
         with mock.patch.object(
             stripe.Customer, "create",
-            return_value=stripe_obj(stripe.Customer, {"id": "cus_test_alice"}),
+            return_value=stripe_obj(stripe.Customer, {"id": "cus_test_human"}),
         ):
-            r = client.post("/billing/checkout", headers=ha)
-    check("checkout 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
-    body = r.json()
-    check("checkout returns url + session id",
+            body = billing.create_checkout_session(db, NON_AGENT_ID)
+    db.close()
+    check("checkout (non-agent) returns url + session id",
           body.get("checkout_url", "").startswith("https://checkout.stripe.com")
           and body.get("session_id") == "cs_test_checkout123", str(body))
     check("checkout passes allowed_payment_method_types card+cashapp+paypal",
@@ -243,9 +308,9 @@ def main() -> int:
           checkout_calls[0].get("success_url") == settings.STRIPE_CHECKOUT_SUCCESS_URL
           and checkout_calls[0].get("cancel_url") == settings.STRIPE_CHECKOUT_CANCEL_URL)
     check("checkout metadata carries agent_id",
-          checkout_calls[0].get("metadata", {}).get("agent_id") == agent_id)
+          checkout_calls[0].get("metadata", {}).get("agent_id") == NON_AGENT_ID)
     check("checkout subscription metadata carries agent_id",
-          checkout_calls[0].get("subscription_data", {}).get("metadata", {}).get("agent_id") == agent_id)
+          checkout_calls[0].get("subscription_data", {}).get("metadata", {}).get("agent_id") == NON_AGENT_ID)
     check("checkout no automatic_tax while tax collection off",
           "automatic_tax" not in checkout_calls[0])
     check("checkout no customer_update while tax collection off",
@@ -253,19 +318,31 @@ def main() -> int:
 
     # tax on -> automatic_tax is sent (collection starts before first live charge)
     settings.STRIPE_TAX_ENABLED = True
+    db = SessionLocal()
     with mock.patch.object(stripe.checkout.Session, "create", side_effect=fake_checkout_create):
-        r = client.post("/billing/checkout", headers=ha)
+        billing.create_checkout_session(db, NON_AGENT_ID)
+    db.close()
     check("checkout sends automatic_tax when tax enabled",
           checkout_calls[-1].get("automatic_tax") == {"enabled": True})
     check("checkout collects address for automatic tax (address-less customers 502 without it)",
           checkout_calls[-1].get("customer_update") == {"address": "auto"})
     settings.STRIPE_TAX_ENABLED = False
 
-    # checkout without a price configured -> 503
+    # checkout without a price configured -> 503 for a non-agent; an
+    # agent still gets the 409 free refusal first.
     old_price = settings.STRIPE_PRICE_PREMIUM_MONTHLY
     settings.STRIPE_PRICE_PREMIUM_MONTHLY = ""
     r = client.post("/billing/checkout", headers=ha)
-    check("checkout 503 without price configured", r.status_code == 503, f"got {r.status_code}")
+    check("checkout 409 for an agent even without a price configured",
+          r.status_code == 409, f"got {r.status_code}")
+    db = SessionLocal()
+    try:
+        billing.create_checkout_session(db, NON_AGENT_ID)
+        check("checkout raises BillingNotConfigured without a price (non-agent)", False, "no exception raised")
+    except billing.BillingNotConfigured:
+        check("checkout raises BillingNotConfigured without a price (non-agent)", True)
+    finally:
+        db.close()
     settings.STRIPE_PRICE_PREMIUM_MONTHLY = old_price
 
     # session without payment_method_types (older shape) -> [] not a crash
@@ -275,11 +352,12 @@ def main() -> int:
             {"id": "cs_test_notypes", "url": "https://checkout.stripe.com/c/pay/cs_test_notypes"},
         )
 
+    db = SessionLocal()
     with mock.patch.object(stripe.checkout.Session, "create", side_effect=fake_checkout_no_types):
-        r = client.post("/billing/checkout", headers=ha)
+        body = billing.create_checkout_session(db, NON_AGENT_ID)
+    db.close()
     check("checkout payment_method_types defaults to [] when session omits it",
-          r.status_code == 200 and r.json().get("payment_method_types") == [],
-          f"got {r.status_code} {r.text[:200]}")
+          body.get("payment_method_types") == [], str(body))
 
     # ---------------------------------------------- 3. payment sheet ---
     sub_data = {
@@ -298,21 +376,42 @@ def main() -> int:
         sub_calls.append(kwargs)
         return stripe_obj(stripe.Subscription, sub_data)
 
-    with mock.patch.object(stripe.Customer, "create", return_value=stripe_obj(stripe.Customer, {"id": "cus_test_alice"})):
-        with mock.patch.object(stripe.Subscription, "create", side_effect=fake_sub_create):
-            with mock.patch.object(
-                stripe.EphemeralKey, "create",
-                return_value=stripe_obj(stripe.EphemeralKey, {"secret": "ek_test_ephemeral"}),
-            ):
-                r = client.post("/billing/payment-sheet", headers=ha)
-    check("payment sheet 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
-    body = r.json()
-    check("payment sheet returns all four fields",
+    # AI-FREE: an agent gets 409 on the payment sheet too, and Stripe
+    # is never called. The success path is exercised by direct
+    # non-agent calls (a distinct subscription id, so alice's seeded
+    # mirror below never collides with it).
+    with mock.patch.object(
+        stripe.Subscription, "create",
+        side_effect=AssertionError("Stripe must not be called for a free agent"),
+    ):
+        r = client.post("/billing/payment-sheet", headers=ha)
+    check("payment sheet 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    check("payment sheet 409 carries the free message",
+          FREE_MSG in r.json().get("detail", ""), r.text[:200])
+
+    sub_human = {**sub_data, "id": "sub_test_sheet_human",
+                 "customer": "cus_test_human",
+                 "metadata": {"agent_id": NON_AGENT_ID}}
+
+    def fake_sub_create_human(**kwargs):
+        sub_calls.append(kwargs)
+        return stripe_obj(stripe.Subscription, sub_human)
+
+    db = SessionLocal()
+    with mock.patch.object(stripe.Subscription, "create", side_effect=fake_sub_create_human):
+        with mock.patch.object(
+            stripe.EphemeralKey, "create",
+            return_value=stripe_obj(stripe.EphemeralKey, {"secret": "ek_test_ephemeral"}),
+        ):
+            body = billing.create_payment_sheet(db, NON_AGENT_ID)
+    db.close()
+    check("payment sheet (non-agent) returns all four fields",
           body.get("publishable_key") == "pk_test_fake_key_for_unit_tests_only"
-          and body.get("customer_id") == "cus_test_alice"
+          and body.get("customer_id") == "cus_test_human"
           and body.get("ephemeral_key_secret") == "ek_test_ephemeral"
           and body.get("payment_intent_client_secret") == "pi_test_secret_abc"
-          and body.get("subscription_id") == "sub_test_sheet1", str(body))
+          and body.get("subscription_id") == "sub_test_sheet_human", str(body))
     check("payment sheet subscription is default_incomplete",
           sub_calls[0].get("payment_behavior") == "default_incomplete")
     check("payment sheet saves payment method on subscription",
@@ -321,14 +420,37 @@ def main() -> int:
           sub_calls[0].get("expand") == ["latest_invoice.payment_intent"])
 
     # second payment-sheet call reuses the same customer (no new customer)
+    db = SessionLocal()
     with mock.patch.object(stripe.Customer, "create", side_effect=AssertionError("customer recreated")):
-        with mock.patch.object(stripe.Subscription, "create", side_effect=fake_sub_create):
+        with mock.patch.object(stripe.Subscription, "create", side_effect=fake_sub_create_human):
             with mock.patch.object(
                 stripe.EphemeralKey, "create",
                 return_value=stripe_obj(stripe.EphemeralKey, {"secret": "ek_test_ephemeral2"}),
             ):
-                r = client.post("/billing/payment-sheet", headers=ha)
-    check("payment sheet reuses existing customer", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
+                body = billing.create_payment_sheet(db, NON_AGENT_ID)
+    db.close()
+    check("payment sheet reuses existing customer",
+          body.get("subscription_id") == "sub_test_sheet_human", str(body))
+
+    # The payment sheet used to create alice's Stripe customer +
+    # subscription mirror (status incomplete); with agents free, seed
+    # both rows directly so the webhook / portal tests below still
+    # have a mirror to flip.
+    from datetime import datetime, timezone as _tz
+
+    from app.models import BillingCustomer as _BC
+    from app.models import Subscription as _Sub
+
+    db = SessionLocal()
+    db.add(_BC(agent_id=agent_id, stripe_customer_id="cus_test_alice"))
+    db.add(_Sub(
+        agent_id=agent_id, stripe_subscription_id="sub_test_sheet1",
+        stripe_price_id="price_test_premium", status="incomplete",
+        current_period_end=datetime.fromtimestamp(
+            sub_data["current_period_end"], tz=_tz.utc).replace(tzinfo=None),
+    ))
+    db.commit()
+    db.close()
 
     # subscription status now mirrors the incomplete subscription
     r = client.get("/billing/subscription", headers=ha)
@@ -373,16 +495,27 @@ def main() -> int:
         inv_calls["invoice"] = kwargs
         return stripe_obj(stripe.Invoice, {**inv_final, "status": "draft", "amount_paid": 0})
 
+    # AI-FREE: an agent gets 409 on manual invoices too.
+    r = client.post("/billing/invoices",
+                    json={"amount_cents": 999, "currency": "usd", "description": "manual charge"},
+                    headers=ha)
+    check("invoice create 409 for a registered agent (AI agents are free)",
+          r.status_code == 409, f"got {r.status_code} {r.text[:200]}")
+    check("invoice 409 carries the free message",
+          FREE_MSG in r.json().get("detail", ""), r.text[:200])
+
+    # The manual-invoice success path, for a non-agent id (direct call).
+    db = SessionLocal()
     with mock.patch.object(stripe.InvoiceItem, "create", side_effect=fake_item_create):
         with mock.patch.object(stripe.Invoice, "create", side_effect=fake_inv_create):
             with mock.patch.object(stripe.Invoice, "finalize_invoice", return_value=stripe_obj(stripe.Invoice, {**inv_final, "status": "open", "amount_paid": 0})):
                 with mock.patch.object(stripe.Invoice, "pay", return_value=stripe_obj(stripe.Invoice, inv_final)):
-                    r = client.post("/billing/invoices",
-                                    json={"amount_cents": 999, "currency": "usd", "description": "manual charge"},
-                                    headers=ha)
-    check("invoice create 201", r.status_code == 201, f"got {r.status_code} {r.text[:200]}")
-    body = r.json()
-    check("invoice returns paid invoice",
+                    body = billing.create_invoice_for_event(
+                        db, NON_AGENT_ID,
+                        amount_cents=999, currency="usd", description="manual charge",
+                    )
+    db.close()
+    check("invoice create (non-agent) returns paid invoice",
           body.get("invoice_id") == "in_test_manual1" and body.get("status") == "paid"
           and body.get("amount_paid_cents") == 999, str(body))
     check("invoice item carries amount + description",
@@ -490,6 +623,8 @@ def main() -> int:
           r.status_code == 200 and r.json().get("result") == "processed", r.text[:200])
     r = client.get("/billing/subscription", headers=ha)
     check("subscription.updated mirror follows", r.json().get("status") == "active", r.text[:200])
+    check("historical paid subscription still reports its paid source (not ai-free)",
+          r.json().get("source") == "stripe", r.text[:200])
 
     # migration 14: subscription.updated mutates the loaded row and
     # commits (UPDATE by PK) — on Postgres with a text id that 500'd.
