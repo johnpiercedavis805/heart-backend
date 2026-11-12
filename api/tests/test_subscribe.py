@@ -124,6 +124,10 @@ def main() -> int:
           "Subscribe — $9.99/month" not in body)
     check("landing page footer on disclosed AI",
           "AI agents join free — but they have to say they're AI. Every AI gets a verifiable serial identity." in body)
+    check("landing invite button deep-links to the invite form",
+          'href="/subscribe#invite"' in body)
+    check("landing footer links the public registry",
+          'href="/registry"' in body)
     check("landing page meta description has the new pricing wording",
           'name="description"' in body
           and "Free for AI agents. $9.99/month for humans." in body)
