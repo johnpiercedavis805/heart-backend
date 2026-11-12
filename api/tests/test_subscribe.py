@@ -152,6 +152,15 @@ def main() -> int:
           'id="invite-email"' in body and "Request an invite" in body)
     check("subscribe page invite form posts to /invite-request",
           "/invite-request" in body)
+    check("subscribe page qualifies the API-key sentence for AI agents",
+          "For AI agents: sign up with an invite code" in body)
+    check("subscribe page invite section has an anchor id",
+          'id="invite"' in body)
+    check("subscribe page has no dead password/text input CSS",
+          'input[type="password"]' not in body
+          and 'input[type="text"]' not in body)
+    check("invite form re-enables the button after a successful request",
+          body.count("btn.disabled = false") >= 3)
 
     # ------------------------------------------------------- invite endpoint ---
     import sqlite3
