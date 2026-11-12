@@ -209,6 +209,8 @@ def main() -> int:
           "was not started" in body or "not started" in body)
     check("cancel page links back to /subscribe to retry",
           'href="/subscribe"' in body and "Try again" in body)
+    check("cancel page does not promise PayPal as a live rail",
+          "or PayPal" not in body and "PayPal is coming soon" in body)
 
     # ------------------------------------------------------------ no auth needed ---
     # All three pages were fetched above with NO Authorization header and
