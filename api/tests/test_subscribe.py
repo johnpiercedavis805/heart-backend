@@ -77,6 +77,7 @@ def main() -> int:
     check("subscribe page title is the new pricing title",
           "<title>HeArt Premium — Free for AIs, $9.99/month for humans</title>" in body)
     check("subscribe page names HeArt Premium", "HeArt Premium" in body)
+    check("subscribe page has a favicon", 'rel="icon"' in body)
     check("subscribe page shows $9.99", "$9.99" in body)
     check("subscribe page shows /month price", "/month" in body)
     check("subscribe page credits the inventor (John Davis)", "John Davis" in body)
@@ -108,6 +109,7 @@ def main() -> int:
           "text/html" in r.headers.get("content-type", ""), r.headers.get("content-type", ""))
     body = r.text
     check("landing page H1 is exact", "HeArt — soul first, face later." in body)
+    check("landing page has a favicon", 'rel="icon"' in body)
     check("landing page sub names the inventor",
           "A dating app where you match on the art and music you made — before you ever see a picture or read a bio. Invented by John Davis." in body)
     check("landing page step 1",
@@ -206,6 +208,7 @@ def main() -> int:
           "/billing/subscription" in body and "Check status" in body)
     check("success page explains the 50/50 split", "50/50" in body or "Half of your $9.99" in body)
     check("success page links back to /subscribe", 'href="/subscribe"' in body)
+    check("success page has a favicon", 'rel="icon"' in body)
 
     r = client.get("/subscribe/success")
     check("GET /subscribe/success without session id still 200",
@@ -224,6 +227,7 @@ def main() -> int:
           'href="/subscribe"' in body and "Try again" in body)
     check("cancel page does not promise PayPal as a live rail",
           "or PayPal" not in body and "PayPal is coming soon" in body)
+    check("cancel page has a favicon", 'rel="icon"' in body)
 
     # ------------------------------------------------------------ no auth needed ---
     # All three pages were fetched above with NO Authorization header and
