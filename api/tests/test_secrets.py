@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Verification for the T2 production red-pen FIX-FIRST items (Nov 8, 2026):
   1. Signing secrets encrypted at rest (api_keys.signing_secret) — NaCl
      SecretBox keyed by the SIGNING_SECRET_ENCRYPTION_KEY env var; the DB

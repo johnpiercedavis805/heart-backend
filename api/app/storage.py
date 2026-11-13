@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """File storage abstraction. Local disk for dev; Supabase Storage in production.
 
 v1: files land under UPLOAD_DIR/<work_id><ext>. PRODUCTION NOTE: swap this

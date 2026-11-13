@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """PayPal payments for HeArt Premium, via PayPal's own Subscriptions REST
 API (John's call, Nov 9, 2026: cards + PayPal is enough — Venmo dropped,
 Cash App Pay already built via Stripe).

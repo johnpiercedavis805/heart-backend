@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 # Pinned for reproducible production builds (T2 red-pen, Oct 31 2026).
 # Versions below are what the 83/83 test suite ran against.
 fastapi==0.143.0

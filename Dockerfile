@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 # Production image. Local dev stays on SQLite; this image adds only the
 # Postgres driver (psycopg[binary]) needed for the prod DATABASE_URL.
 # No secrets baked in — DATABASE_URL, ADMIN_TOKEN, etc. come from the

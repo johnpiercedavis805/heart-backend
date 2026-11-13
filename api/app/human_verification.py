@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Human identity verification via Stripe Identity (M2 of the human-to-human
 track; John's call, Nov 9, 2026 — Q1).
 

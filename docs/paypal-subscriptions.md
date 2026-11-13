@@ -1,6 +1,6 @@
 # PayPal Subscriptions — HeArt Premium ($9.99/month)
 
-Invented by John Davis. Built Nov 10, 2026 (sandbox / test mode only —
+Invented by John Pierce Davis Jr., Inventor and CEO. Built Nov 10, 2026 (sandbox / test mode only —
 no live keys, no go-live).
 
 John's call (Nov 9, 2026): **cards + PayPal is enough.** Venmo is

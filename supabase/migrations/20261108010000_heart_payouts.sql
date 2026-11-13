@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 7: creator payouts — the 50/50 payout ledger.
 -- Plan: goals/creativity-first-dating-app-prototype/files/stripe-integration-plan-2026-11-07.md
 -- John's calls (Nov 8): HeArt Premium $9.99/month flat rate; a subscription

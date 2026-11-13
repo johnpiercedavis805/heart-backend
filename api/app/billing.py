@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Stripe billing for HeArt Premium (plan: stripe-integration-plan-2026-11-07).
 
 TEST MODE ONLY while STRIPE_TEST_MODE_ONLY is on (the default): a live

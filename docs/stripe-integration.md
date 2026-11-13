@@ -3,7 +3,7 @@
 HeArt Premium billing, built to
 `~/workspace/goals/creativity-first-dating-app-prototype/files/stripe-integration-plan-2026-11-07.md`.
 **Test mode only. HeArt takes no payments yet** — the first live charge is
-a separate decision for John Davis (the inventor).
+a separate decision for John Pierce Davis Jr. (the inventor and CEO).
 
 Build order followed the plan: Payments → Billing → Invoicing → Tax →
 Connect (payouts built Nov 8 — 50/50 on a subscription payment, see §5).

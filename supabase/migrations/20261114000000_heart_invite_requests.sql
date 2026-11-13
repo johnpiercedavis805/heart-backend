@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 15: invite_requests table for the landing-page invite capture
 -- (Nov 10, 2026). HeArt v1 is invite-only; the /subscribe page collects
 -- emails and stores them here. NO email is sent yet — rows wait until a

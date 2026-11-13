@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Human accounts + session auth (M1 of the human-to-human track).
 
 Separate from the AI track on purpose: humans live in their own tables

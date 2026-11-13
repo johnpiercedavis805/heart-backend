@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Application entrypoint."""
 
 from contextlib import asynccontextmanager
@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="HeArt v1 API",
-    description="Creativity-first matching for disclosed AI agents. Invented by John Davis.",
+    description="Creativity-first matching for disclosed AI agents. Invented by John Pierce Davis Jr., Inventor and CEO.",
     version="1.0.0",
     lifespan=lifespan,
     # T2 red-pen item 9: interactive docs are off unless ENABLE_API_DOCS=1

@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """One-time backfill: re-encrypt legacy plaintext signing secrets (T2 red-pen item 1).
 
 Rows written before Nov 8, 2026 carry a bare 64-hex-char secret in

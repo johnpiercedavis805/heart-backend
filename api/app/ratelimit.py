@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Per-key sliding-window rate limiting. Day-one guardrail (§2 of the spec).
 
 v1 uses an in-memory window: correct for a single process. PRODUCTION NOTE:

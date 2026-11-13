@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 13: paypal_subscriptions.id text -> uuid (Nov 10, 2026).
 --
 -- DEFECT (found by the Nov 10, 2026 sandbox end-to-end test): migration

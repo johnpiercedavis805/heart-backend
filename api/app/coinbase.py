@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Bitcoin payments for HeArt Premium, via Coinbase (John's call, Nov 8:
 users can pay with crypto — USDC via Stripe AND Bitcoin via Coinbase).
 

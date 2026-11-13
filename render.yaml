@@ -1,4 +1,4 @@
-# HeArt v1 — Render Blueprint. Invented by John Davis.
+# HeArt v1 — Render Blueprint. Invented by John Pierce Davis Jr., Inventor and CEO.
 # Apply: connect this repo in the Render Dashboard and select this file,
 # or `render blueprint launch`. See docs/deploy-runbook.md for the order
 # of operations — migrations run BEFORE the first successful boot.

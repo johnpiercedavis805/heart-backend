@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 11: PayPal subscriptions (HeArt Premium $9.99/month via
 -- PayPal's own Subscriptions REST API, Nov 9, 2026).
 -- John's call (Nov 9): cards + PayPal is enough. Stripe-native PayPal

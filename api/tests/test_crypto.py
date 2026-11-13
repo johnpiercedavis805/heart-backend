@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """End-to-end verification of crypto payments for HeArt Premium (John's
 calls, Nov 8 — USDC via Stripe AND Bitcoin via Coinbase), run with the
 venv python:

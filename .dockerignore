@@ -1,4 +1,4 @@
-# HeArt v1 — invented by John Davis.
+# HeArt v1 — invented by John Pierce Davis Jr., Inventor and CEO.
 # Keep the build context small: never ship the local venv, caches,
 # tests, or — most importantly — secrets. The Dockerfile copies api/,
 # scripts/, and supabase/ into the production image, so anything that

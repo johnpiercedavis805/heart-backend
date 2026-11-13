@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """End-to-end verification of decentralized agent identity + work attestation
 ("provenance by design"), run with the venv python:
 

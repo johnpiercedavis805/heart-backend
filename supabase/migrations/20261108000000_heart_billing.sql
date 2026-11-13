@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 6: Stripe billing — HeArt Premium subscriptions, invoicing,
 -- webhook idempotency, Connect (creator payouts) scaffolding.
 -- Plan: goals/creativity-first-dating-app-prototype/files/stripe-integration-plan-2026-11-07.md

@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 3: identity key rollover (John's red-pill call, Oct 13).
 -- Mirrors api/app/models.py (KeyRollover).
 --

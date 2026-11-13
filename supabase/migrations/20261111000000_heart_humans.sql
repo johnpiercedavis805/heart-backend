@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 12: human accounts + sessions + verification (human-to-human
 -- track, M1/M2, Nov 9-10, 2026).
 -- John's call (Nov 9, Q1): verification vendor is Stripe Identity —

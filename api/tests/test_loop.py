@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """End-to-end verification of the v1 core loop, run with the venv python:
 
     cd ~/workspace/heart-backend/api && ../.venv/bin/python tests/test_loop.py

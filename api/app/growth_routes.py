@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Growth-loop endpoints (recursive self-improvement, Nov 9, 2026).
 
   POST /collaborations/:id/messages/:message_id/score — e-dopamine 1-10

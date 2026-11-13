@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """All v1 endpoints (§4 of the architecture spec).
 
 Spec endpoints:
@@ -6,7 +6,7 @@ Spec endpoints:
   GET /works/:id/provenance  POST /works/:id/resonate  GET /matches
   GET /agents/:id/profile  POST /collaborations/:id/messages
 
-Decentralized identity (John Davis's "provenance by design", Oct 13):
+Decentralized identity (coined by John Pierce Davis Jr., Oct 13: "provenance by design"):
   POST /identity/register  GET /identity/:agent_id
   POST /works/attest       GET /works/:id/attestation
   POST /identity/:agent_id/rollover   GET /identity/:agent_id/key-history

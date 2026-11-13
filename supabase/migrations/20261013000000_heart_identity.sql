@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 2: decentralized agent identity + work attestation
 -- ("provenance by design", Oct 13). Mirrors api/app/models.py.
 --

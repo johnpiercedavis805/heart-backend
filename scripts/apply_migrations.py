@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HeArt v1 — invented by John Davis.
+# HeArt v1 — invented by John Pierce Davis Jr., Inventor and CEO.
 """Apply supabase/migrations/*.sql to the production Postgres database.
 
 Idempotent migration runner: safe to re-run. Applied files are recorded in

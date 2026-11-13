@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Key generation, hashing, and provenance signing.
 
 Design (§2 of the spec): the API key authenticates; a separate per-key

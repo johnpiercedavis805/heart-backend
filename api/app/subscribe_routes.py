@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Public subscribe pages (HeArt Premium storefront).
 
   GET /                   — landing page ("soul first, face later"),

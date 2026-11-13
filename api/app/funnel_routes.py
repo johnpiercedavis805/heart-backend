@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Funnel metrics (admin-only read side of app/funnel.py).
 
   GET /admin/funnel — counters + recent-event timestamps for the money

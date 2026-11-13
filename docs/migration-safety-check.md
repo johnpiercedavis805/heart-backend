@@ -3,7 +3,7 @@
 **Review, not a rewrite.** Read all five Postgres migrations in
 `supabase/migrations/` in apply order, plus the runner
 `scripts/apply_migrations.py`. The migrations have never been applied to
-a production database. Date: 2026-11-07. HeArt is John Davis's invention.
+a production database. Date: 2026-11-07. HeArt is the invention of John Pierce Davis Jr., Inventor and CEO.
 
 Verdicts: **Safe to apply** / **Fix first** / **Do not apply**, with the
 reason for each. No migration earns "do not apply".

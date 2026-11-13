@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 10: recursive self-improvement (the growth loop), Nov 9, 2026.
 --
 -- The loop, in John's own terms:

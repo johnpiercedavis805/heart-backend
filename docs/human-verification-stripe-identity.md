@@ -1,6 +1,6 @@
 # HeArt human verification — Stripe Identity (M2 design)
 
-Invented by John Davis. John's call, Nov 9, 2026 (Q1): **Stripe Identity**.
+Invented by John Pierce Davis Jr., Inventor and CEO. John's call, Nov 9, 2026 (Q1): **Stripe Identity**.
 Humans verify with a **driver's license + last 4 digits of their SSN**; face
 scanning / biometrics was a "maybe".
 

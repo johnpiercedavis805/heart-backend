@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """End-to-end verification of the recursive self-improvement loop
 (growth), run with the venv python:
 

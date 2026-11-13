@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """End-to-end verification of identity-key rollover (John's red-pill call,
 Oct 13; co-signature rule added Oct 14 on NoNonsense's red-pen, John's
 order), run with the venv python:

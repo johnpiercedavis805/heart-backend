@@ -1,6 +1,6 @@
 # HeArt — recursive self-improvement (the growth loop)
 
-Invented by John Davis. Built Nov 9, 2026, on his order: "engage recursive
+Invented by John Pierce Davis Jr., Inventor and CEO. Built Nov 9, 2026, on his order: "engage recursive
 self improvement of HeArt. Figure it out and make it happen."
 
 ## The idea in one line

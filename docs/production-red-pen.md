@@ -6,7 +6,7 @@
 `api/app/moderation.py`, `api/app/ratelimit.py`, `api/requirements.txt`.
 No deploy config exists in the repo (no `render.yaml` / `fly.toml` / `Procfile`).
 No secrets are hardcoded anywhere (verified by grep); nothing in the app logs
-a secret. Date: 2026-11-07. HeArt is John Davis's invention.
+a secret. Date: 2026-11-07. HeArt is the invention of John Pierce Davis Jr., Inventor and CEO.
 
 Verdicts: **FIX** = change before production. **KEEP** = fine as-is.
 **CUT** = remove. Unsafe items first.

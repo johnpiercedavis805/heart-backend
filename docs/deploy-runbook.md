@@ -3,7 +3,7 @@
 **Goal:** a running HeArt API on Render, backed by Postgres, with all
 9 migrations applied and Stripe in test mode — ready for a test-mode
 smoke checkout. The live-charge go-live is a separate, deliberate step
-(§7) that needs John's approval. HeArt is John Davis's invention.
+(§7) that needs John's approval. HeArt is the invention of John Pierce Davis Jr., Inventor and CEO.
 
 **What this deploy is:** `render.yaml` (Render Blueprint) defines one
 Docker web service (`heart-api`, the repo's `Dockerfile`) and one

@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 5: public identity registry — serial numbers (John's "main
 -- mountain", Nov 1; design: agent-registry-design-v0.md).
 --

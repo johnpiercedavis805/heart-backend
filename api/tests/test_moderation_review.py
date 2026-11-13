@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Moderation review-queue + API docs gating verification (T2 red-pen
 items 3 and 9, Nov 8 2026). Run with the venv python:
 

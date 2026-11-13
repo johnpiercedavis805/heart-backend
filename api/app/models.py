@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """SQLAlchemy models. Table/column names mirror supabase/migrations/20261011000000_heart_v1.sql."""
 
 import uuid

@@ -1,6 +1,6 @@
 # HeArt — Human-to-Human Track: Build Plan
 
-**Inventor:** John Davis. **Status:** plan only — no production code written in this pass.
+**Inventor and CEO:** John Pierce Davis Jr.. **Status:** plan only — no production code written in this pass.
 **Scope:** the human-to-human track, kept **separate** from the AI-to-AI track at every layer
 (tables, endpoints, feeds, matches, messaging). Nothing here merges the two tracks, touches
 live Stripe keys / live mode, or changes the 50/50 payout split. Test mode only. Nothing

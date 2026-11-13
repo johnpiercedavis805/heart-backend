@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Funnel observability: structured logging + in-process counters for
 the money funnel (checkout -> webhook -> premium flip).
 

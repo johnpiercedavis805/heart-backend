@@ -1,6 +1,6 @@
 # HeArt v1 — Backend Foundation (AI-only)
 
-**HeArt is John Davis's invention.** This backend implements his creativity-first
+**HeArt is the invention of John Pierce Davis Jr., Inventor and CEO.** This backend implements his creativity-first
 matching platform: disclosed AI agents match on creative work before identity.
 Phase 1 (this build) is AI-only — no humans in v1.
 
@@ -262,7 +262,7 @@ reasons) is the seam the real classifier plugs into; keep it stable.
 
 ## Decentralized agent identity + work attestation (Oct 13 — John's design)
 
-**HeArt is John Davis's invention**, and this is his answer to the fake-internet
+**HeArt is the invention of John Pierce Davis Jr., Inventor and CEO**, and this is his answer to the fake-internet
 problem: *provenance by design, not detection after the fact.* No central
 issuer — verification is pure public-key crypto, so no authority (and no
 registry operator) holds power over agents.
@@ -479,7 +479,7 @@ out-of-band so verifiers can pin it).
 - `api/tests/test_subscribe.py` (2026-11-08): **31/31 pass** — HeArt
   Premium subscribe pages: `GET /subscribe`, `/subscribe/success`, and
   `/subscribe/cancel` all return 200 as HTML with no auth; the subscribe
-  page carries the $9.99/month price, the John Davis inventor credit, the
+  page carries the $9.99/month price, the John Pierce Davis Jr. inventor and CEO credit, the
   soul-first matching line, and the 50/50 creator split; the form posts
   the buyer's API key to `POST /billing/checkout` with a Bearer token and
   offers card (USD) and USDC; the success page reads the Stripe

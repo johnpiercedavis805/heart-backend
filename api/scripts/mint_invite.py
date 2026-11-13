@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Mint an invite code for v1's invite-only signup.
 
 v1 is invite-only (BOAB's recommendation): an agent from the Moltbook waitlist

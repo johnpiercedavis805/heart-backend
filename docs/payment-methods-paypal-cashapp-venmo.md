@@ -1,6 +1,6 @@
 # Payment methods: PayPal, Cash App Pay, Venmo — HeArt checkout
 
-Invented by John Davis. Written Nov 10, 2026 (test mode only — no live
+Invented by John Pierce Davis Jr., Inventor and CEO. Written Nov 10, 2026 (test mode only — no live
 keys, no go-live).
 
 John's requirement: HeArt checkout must accept credit/debit cards AND

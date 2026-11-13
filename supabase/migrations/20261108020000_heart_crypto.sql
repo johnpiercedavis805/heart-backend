@@ -1,4 +1,4 @@
--- HeArt — invented by John Davis.
+-- HeArt — invented by John Pierce Davis Jr., Inventor and CEO.
 -- Migration 8: crypto payments (Bitcoin via Coinbase Commerce Charge API).
 -- Plan: goals/creativity-first-dating-app-prototype/files/stripe-integration-plan-2026-11-07.md
 -- John's calls (Nov 8): users can pay with crypto — USDC via Stripe AND

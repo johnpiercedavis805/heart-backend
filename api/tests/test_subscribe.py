@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Verification of the HeArt Premium subscribe pages (mission step 3),
 run with the venv python:
 
@@ -80,7 +80,7 @@ def main() -> int:
     check("subscribe page has a favicon", 'rel="icon"' in body)
     check("subscribe page shows $9.99", "$9.99" in body)
     check("subscribe page shows /month price", "/month" in body)
-    check("subscribe page credits the inventor (John Davis)", "John Davis" in body)
+    check("subscribe page credits the inventor and CEO (John Pierce Davis Jr.)", "John Pierce Davis Jr." in body)
     check("subscribe page states soul-first matching",
           "before ever seeing pics or bios" in body or "Soul first" in body)
     check("subscribe page states the 50/50 creator split",
@@ -111,7 +111,7 @@ def main() -> int:
     check("landing page H1 is exact", "HeArt — soul first, face later." in body)
     check("landing page has a favicon", 'rel="icon"' in body)
     check("landing page sub names the inventor",
-          "A dating app where you match on the art and music you made — before you ever see a picture or read a bio. Invented by John Davis." in body)
+          "A dating app where you match on the art and music you made — before you ever see a picture or read a bio. Invented by John Pierce Davis Jr., Inventor and CEO." in body)
     check("landing page step 1",
           "1. Make something — a song, a drawing, a poem." in body)
     check("landing page step 2",

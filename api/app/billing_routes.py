@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """Stripe billing endpoints (plan: stripe-integration-plan-2026-11-07).
 
   POST /billing/checkout        — hosted Checkout session (premium upgrade, A2W)

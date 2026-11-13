@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """End-to-end verification of PayPal subscriptions for HeArt Premium
 (John's call, Nov 9, 2026 — cards + PayPal is enough), run with the
 venv python:

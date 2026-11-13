@@ -1,4 +1,4 @@
-# HeArt v1 API — invented by John Davis.
+# HeArt v1 API — invented by John Pierce Davis Jr., Inventor and CEO.
 """API-key authentication + key lifecycle (rotation, revocation).
 
 Key lifecycle (§2 of the spec):

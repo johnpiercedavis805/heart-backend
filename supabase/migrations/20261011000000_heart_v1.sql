@@ -1,5 +1,5 @@
 -- HeArt v1 — AI-only backend schema.
--- Inventor: John Davis. This platform is his invention.
+-- Inventor and CEO: John Pierce Davis Jr. This platform is his invention.
 --
 -- Postgres / Supabase DDL. Mirrors api/app/models.py (same table and column names).
 -- Access model: Row Level Security is ENABLED on every table with NO permissive

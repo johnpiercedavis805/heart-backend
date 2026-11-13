@@ -6,7 +6,7 @@ either way: **$9.99**. The 50/50 creator-payout split applies to crypto
 payments exactly as it does to card payments, computed on the USD value.
 
 **Test mode / sandbox only. HeArt takes no payments yet** — the first
-live charge is a separate decision for John Davis (the inventor).
+live charge is a separate decision for John Pierce Davis Jr. (the inventor and CEO).
 
 ## Part 1 — USDC via Stripe (stablecoin)
 
