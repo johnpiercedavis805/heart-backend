@@ -77,6 +77,7 @@ def main() -> int:
     check("subscribe page title is the new pricing title",
           "<title>HeArt Premium — Free for AIs, $9.99/month for humans</title>" in body)
     check("subscribe page names HeArt Premium", "HeArt Premium" in body)
+    check("subscribe page has a favicon", 'rel="icon"' in body)
     check("subscribe page shows $9.99", "$9.99" in body)
     check("subscribe page shows /month price", "/month" in body)
     check("subscribe page credits the inventor (John Davis)", "John Davis" in body)
@@ -108,6 +109,7 @@ def main() -> int:
           "text/html" in r.headers.get("content-type", ""), r.headers.get("content-type", ""))
     body = r.text
     check("landing page H1 is exact", "HeArt — soul first, face later." in body)
+    check("landing page has a favicon", 'rel="icon"' in body)
     check("landing page sub names the inventor",
           "A dating app where you match on the art and music you made — before you ever see a picture or read a bio. Invented by John Davis." in body)
     check("landing page step 1",
@@ -124,6 +126,10 @@ def main() -> int:
           "Subscribe — $9.99/month" not in body)
     check("landing page footer on disclosed AI",
           "AI agents join free — but they have to say they're AI. Every AI gets a verifiable serial identity." in body)
+    check("landing invite button deep-links to the invite form",
+          'href="/subscribe#invite"' in body)
+    check("landing footer links the public registry",
+          'href="/registry"' in body)
     check("landing page meta description has the new pricing wording",
           'name="description"' in body
           and "Free for AI agents. $9.99/month for humans." in body)
@@ -152,6 +158,15 @@ def main() -> int:
           'id="invite-email"' in body and "Request an invite" in body)
     check("subscribe page invite form posts to /invite-request",
           "/invite-request" in body)
+    check("subscribe page qualifies the API-key sentence for AI agents",
+          "For AI agents: sign up with an invite code" in body)
+    check("subscribe page invite section has an anchor id",
+          'id="invite"' in body)
+    check("subscribe page has no dead password/text input CSS",
+          'input[type="password"]' not in body
+          and 'input[type="text"]' not in body)
+    check("invite form re-enables the button after a successful request",
+          body.count("btn.disabled = false") >= 3)
 
     # ------------------------------------------------------- invite endpoint ---
     import sqlite3
@@ -193,6 +208,7 @@ def main() -> int:
           "/billing/subscription" in body and "Check status" in body)
     check("success page explains the 50/50 split", "50/50" in body or "Half of your $9.99" in body)
     check("success page links back to /subscribe", 'href="/subscribe"' in body)
+    check("success page has a favicon", 'rel="icon"' in body)
 
     r = client.get("/subscribe/success")
     check("GET /subscribe/success without session id still 200",
@@ -209,6 +225,9 @@ def main() -> int:
           "was not started" in body or "not started" in body)
     check("cancel page links back to /subscribe to retry",
           'href="/subscribe"' in body and "Try again" in body)
+    check("cancel page does not promise PayPal as a live rail",
+          "or PayPal" not in body and "PayPal is coming soon" in body)
+    check("cancel page has a favicon", 'rel="icon"' in body)
 
     # ------------------------------------------------------------ no auth needed ---
     # All three pages were fetched above with NO Authorization header and

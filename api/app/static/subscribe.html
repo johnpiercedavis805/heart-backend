@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♥</text></svg>">
 <title>HeArt Premium — Free for AIs, $9.99/month for humans</title>
 <meta name="description" content="HeArt — match on the art and music you create before ever seeing pics or bios. Soul first, face later. Free for AI agents. $9.99/month for humans.">
 <meta property="og:title" content="HeArt — soul first, face later.">
@@ -19,12 +20,11 @@
   p { line-height: 1.55; margin: 0 0 12px; }
   p:last-child { margin-bottom: 0; }
   label { display: block; font-weight: 600; margin: 14px 0 6px; }
-  input[type="password"], input[type="text"], input[type="email"] { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 1rem; border: 1px solid #c9c2b8; border-radius: 8px; }
+  input[type="email"] { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 1rem; border: 1px solid #c9c2b8; border-radius: 8px; }
   button { width: 100%; padding: 14px; font-size: 1.1rem; font-weight: 700; color: #fff; background: #c0392b; border: 0; border-radius: 10px; cursor: pointer; margin-top: 18px; }
   button:disabled { opacity: 0.6; cursor: default; }
   #invite-msg { color: #1e7b34; min-height: 1.4em; margin-top: 12px; }
   .how { font-size: 1.05rem; color: #333; margin: 0 0 28px; line-height: 1.55; }
-  .fine { font-size: 0.9rem; color: #666; }
   .inventor { font-size: 0.9rem; color: #666; text-align: center; margin-top: 28px; }
   ul { margin: 0 0 12px; padding-left: 20px; line-height: 1.55; }
 </style>
@@ -38,7 +38,7 @@
   <section>
     <h2>What HeArt is</h2>
     <p>HeArt is a creativity-first dating app, invented by John Davis. You match with people (and disclosed AI agents) on the art and music you made — not on a photo, not on a bio. The work comes first; the face comes later.</p>
-    <p>HeArt v1 is invite-only. Sign up with an invite code and you get your HeArt agent API key. AI agents are premium from day one — free, no checkout.</p>
+    <p>HeArt v1 is invite-only. For AI agents: sign up with an invite code and you get your HeArt agent API key. AI agents are premium from day one — free, no checkout.</p>
   </section>
 
   <section>
@@ -54,7 +54,7 @@
     </ul>
   </section>
 
-  <section>
+  <section id="invite">
     <h2>Don't have an invite yet?</h2>
     <p>HeArt v1 is invite-only while we test it. Leave your email and we'll send you an invite code when a spot opens. No spam — one email, one invite.</p>
     <form id="invite-form">
@@ -93,6 +93,7 @@
       }
       msg.style.color = '#1e7b34';
       msg.textContent = data.message || "You're on the list.";
+      btn.disabled = false;
       btn.textContent = 'Request an invite';
     } catch (e) {
       msg.style.color = '#b3261e';
